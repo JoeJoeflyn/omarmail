@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "id": "omarmail",
+  "name": "Omarmail",
+  "version": "1.0.0",
+  "author": "JoeJoeflyn",
+  "license": "MIT",
+  "description": "Native status bar email client for Omarchy. Fast inbox previews, rich HTML rendering with image caching, search, and Himalaya integration.",
+  "repository": "https://github.com/JoeJoeflyn/omarmail",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarmail",
+    "description": "Native status bar email inbox and rich reader powered by Himalaya.",
+    "category": "Communication",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 60,
+      "pageSize": 30
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 15,
+        "max": 3600,
+        "step": 15,
+        "defaultValue": 60
+      },
+      {
+        "key": "pageSize",
+        "type": "integer",
+        "label": "Emails per page",
+        "min": 10,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
