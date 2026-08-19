@@ -60,12 +60,17 @@ Panel {
   readonly property int unreadCount: Model.unreadCount(allEnvelopes.length > 0 ? allEnvelopes : envelopes)
   property string label: "\uf0e0"
 
+  Component.onCompleted: {
+    cacheInitProc.running = true
+  }
+
   // ---- Lifecycle
 
   function open() {
     openedFromHotkey = false
     viewMode = "inbox"
     setCenterHoverRevealSuppressed(false)
+    if (root.allEnvelopes.length === 0 && !cacheInitProc.running) cacheInitProc.running = true
     root.controller.show()
     root.refresh()
   }
@@ -73,6 +78,7 @@ Panel {
   function openFromHotkey() {
     openedFromHotkey = true
     viewMode = "inbox"
+    if (root.allEnvelopes.length === 0 && !cacheInitProc.running) cacheInitProc.running = true
     root.controller.show()
     root.refresh()
     Qt.callLater(function() {
@@ -264,18 +270,39 @@ Panel {
   // ---- Processes
 
   Process {
+    id: cacheInitProc
+    command: ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), "--cache-only"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var raw = String(text || "").trim()
+          var parsed = JSON.parse(raw)
+          if (parsed && parsed.envelopes && parsed.envelopes.length > 0 && root.allEnvelopes.length === 0) {
+            root.allEnvelopes = parsed.envelopes
+            if (!root.searchMode) root.envelopes = parsed.envelopes
+            root.ready = true
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  Process {
     id: listProc
-    command: ["himalaya", "envelope", "list", "--json", "-s", String(pageSize), "-p", "1"]
+    command: ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), String(pageSize), String(currentPage)]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var raw = String(text || "").trim()
         var result = Model.parseEnvelopeList(raw)
-        root.allEnvelopes = result.envelopes
-        if (root.searchMode && !root.gmailSearch && root.searchQuery !== "")
-          root.envelopes = Model.fuzzyFilter(result.envelopes, root.searchQuery)
-        else
-          root.envelopes = result.envelopes
+        if (result.envelopes && result.envelopes.length > 0) {
+          root.allEnvelopes = result.envelopes
+          if (root.searchMode && !root.gmailSearch && root.searchQuery !== "")
+            root.envelopes = Model.fuzzyFilter(result.envelopes, root.searchQuery)
+          else
+            root.envelopes = result.envelopes
+        }
 
         if (result.error && (
             result.error.indexOf("prompt") >= 0 ||
@@ -289,7 +316,7 @@ Panel {
           root.errorMsg = ""
         } else if (result.error && result.error.indexOf("not found") >= 0) {
           root.errorMsg = "himalaya not found — install with 'omarchy pkg add himalaya'"
-        } else {
+        } else if (result.error && root.allEnvelopes.length === 0) {
           root.errorMsg = result.error
         }
         root.ready = true
@@ -298,7 +325,7 @@ Panel {
     onExited: function(exitCode) {
       if (!root.ready) {
         root.ready = true
-        if (root.errorMsg === "" && !root.needsAuth)
+        if (root.errorMsg === "" && !root.needsAuth && root.allEnvelopes.length === 0)
           root.errorMsg = "Failed to load emails"
       }
     }

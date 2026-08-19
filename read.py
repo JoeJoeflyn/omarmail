@@ -20,7 +20,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail/images")
+MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
 os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(MSG_CACHE_DIR, exist_ok=True)
 
 def run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -353,6 +355,20 @@ def main():
         sys.exit(1)
 
     mid = sys.argv[1]
+    force = "--force" in sys.argv
+    cache_file = os.path.join(MSG_CACHE_DIR, f"{mid}.json")
+
+    # Fast path: instant return from cache
+    if not force and os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached_data = f.read()
+                if cached_data.strip():
+                    print(cached_data)
+                    return
+        except Exception:
+            pass
+
     out, err, code = run(["himalaya", "message", "read", "--json", mid])
     if code != 0 or not out:
         print(json.dumps({"error": err or "Failed to read message", "id": mid}))
@@ -451,6 +467,12 @@ def main():
         "body": body_html,
         "error": ""
     }
+
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False)
+    except Exception:
+        pass
 
     print(json.dumps(output))
 
