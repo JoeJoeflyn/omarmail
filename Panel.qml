@@ -607,6 +607,7 @@ Panel {
                 Text {
                   id: unreadBadgeText
                   anchors.centerIn: parent
+                  textFormat: Text.PlainText
                   text: root.unreadCount + " unread"
                   color: Color.accent
                   font.family: root.fontFamily
@@ -816,6 +817,7 @@ Panel {
               id: errText
               anchors.centerIn: parent
               width: parent.width - Style.space(32)
+              textFormat: Text.PlainText
               text: root.errorMsg
               color: root.urgent
               font.family: root.fontFamily
@@ -849,6 +851,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: "Loading inbox..."
               color: root.dim
               font.family: root.fontFamily
@@ -874,6 +877,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: root.searchMode ? "No matching emails found" : "All caught up! Inbox is clear."
               color: root.dim
               font.family: root.fontFamily
@@ -956,6 +960,7 @@ Panel {
 
                   Text {
                     anchors.centerIn: parent
+                    textFormat: Text.PlainText
                     text: Model.senderInitials(emailRow.env)
                     color: emailRow.isSeen ? root.dim : root.foreground
                     font.family: root.fontFamily
@@ -975,6 +980,7 @@ Panel {
                     spacing: Style.space(6)
 
                     Text {
+                      textFormat: Text.PlainText
                       text: Model.senderName(emailRow.env)
                       color: emailRow.isSeen ? root.dim : root.foreground
                       font.family: root.fontFamily
@@ -986,6 +992,7 @@ Panel {
 
                     Text {
                       id: dateText
+                      textFormat: Text.PlainText
                       text: Model.formatDate(emailRow.env.date)
                       color: root.dim
                       font.family: root.fontFamily
@@ -996,6 +1003,7 @@ Panel {
 
                   Text {
                     width: parent.width
+                    textFormat: Text.PlainText
                     text: Model.subject(emailRow.env)
                     color: emailRow.isSeen ? root.dim : root.foreground
                     font.family: root.fontFamily
@@ -1065,6 +1073,7 @@ Panel {
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
                 text: root.searchMode ? (root.envelopes.length + " results") : ("Page " + root.currentPage)
                 color: root.dim
                 font.family: root.fontFamily
@@ -1181,6 +1190,7 @@ Panel {
           // Subject Title
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: root.currentDetail ? root.currentDetail.subject : (root.selectedEnvelope ? Model.subject(root.selectedEnvelope) : "")
             color: root.foreground
             font.family: root.fontFamily
@@ -1205,6 +1215,7 @@ Panel {
 
               Text {
                 anchors.centerIn: parent
+                textFormat: Text.PlainText
                 text: root.currentDetail && root.currentDetail.from_initials ? root.currentDetail.from_initials : (root.selectedEnvelope ? Model.senderInitials(root.selectedEnvelope) : "?")
                 color: root.foreground
                 font.family: root.fontFamily
@@ -1223,6 +1234,7 @@ Panel {
                 spacing: Style.space(6)
 
                 Text {
+                  textFormat: Text.PlainText
                   text: root.currentDetail && root.currentDetail.from_name ? root.currentDetail.from_name : (root.selectedEnvelope ? Model.senderName(root.selectedEnvelope) : "Unknown")
                   color: root.foreground
                   font.family: root.fontFamily
@@ -1232,6 +1244,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   text: {
                     var em = root.currentDetail && root.currentDetail.from_email ? root.currentDetail.from_email : (root.selectedEnvelope ? Model.senderEmail(root.selectedEnvelope) : "")
                     return em ? "<" + em + ">" : ""
@@ -1249,6 +1262,7 @@ Panel {
                 spacing: Style.space(8)
 
                 Text {
+                  textFormat: Text.PlainText
                   text: root.currentDetail && root.currentDetail.date_formatted ? root.currentDetail.date_formatted : (root.selectedEnvelope ? Model.formatFullDate(root.selectedEnvelope.date) : "")
                   color: root.dim
                   font.family: root.fontFamily
@@ -1269,6 +1283,7 @@ Panel {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     text: "Attachment"
                     color: Color.accent
                     font.family: root.fontFamily
@@ -1314,6 +1329,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: "Loading email content..."
               color: root.dim
               font.family: root.fontFamily

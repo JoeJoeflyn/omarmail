@@ -16,13 +16,97 @@ import subprocess
 import sys
 import hashlib
 import struct
+import socket
+import ipaddress
 import urllib.request
+import urllib.parse
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail/images")
 MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(MSG_CACHE_DIR, exist_ok=True)
+
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB max per image
+
+def is_safe_public_ip(ip_str):
+    """Verify IP address is a safe public IP (exclude private, loopback, link-local, cloud metadata)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if (ip.is_private or ip.is_loopback or ip.is_link_local or 
+        ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+        return False
+    # Check Carrier Grade NAT (100.64.0.0/10)
+    cgnat = ipaddress.ip_network("100.64.0.0/10")
+    if ip.version == 4 and ip in cgnat:
+        return False
+    return True
+
+def validate_url_safe(url):
+    """Validate that a URL uses http/https, valid ports, and resolves strictly to public IPs."""
+    if not url or not isinstance(url, str):
+        return False, "Invalid URL"
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in ("http", "https"):
+            return False, "Invalid scheme"
+        host = parsed.hostname
+        if not host:
+            return False, "Missing host"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if port not in (80, 443, 8080, 8443):
+            return False, "Non-standard port"
+
+        # Check if direct IP literal
+        try:
+            ip_obj = ipaddress.ip_address(host)
+            if not is_safe_public_ip(str(ip_obj)):
+                return False, f"Private IP literal: {host}"
+        except ValueError:
+            pass  # Domain name
+
+        # Resolve DNS to check all target addresses
+        addrs = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        if not addrs:
+            return False, "DNS resolution failed"
+        for family, socktype, proto, canonname, sockaddr in addrs:
+            ip = sockaddr[0]
+            if not is_safe_public_ip(ip):
+                return False, f"Resolved to private IP: {ip}"
+        return True, "Safe"
+    except Exception as e:
+        return False, str(e)
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Disallow redirects to unsafe, private, or non-http URLs."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        is_safe, _ = validate_url_safe(newurl)
+        if not is_safe:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def is_valid_image_bytes(data):
+    """Verify magic bytes for valid image formats."""
+    if len(data) < 8:
+        return False
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if data.startswith(b"\xff\xd8\xff"):
+        return True
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return True
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+        return True
+    if data.startswith(b"BM"):
+        return True
+    if data.startswith(b"\x00\x00\x01\x00"):
+        return True
+    return False
 
 def run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -123,23 +207,52 @@ def get_scaled_img_tag(local_path, panel_width=360):
     return f'<img src="file://{local_path}" width="{min(lw, panel_width)}">'
 
 def download_image(url):
-    """Download and cache remote email images with ultra-fast timeout."""
-    if not url or not url.startswith("http"):
+    """Download and cache remote email images with SSRF protection, size limits, and magic-byte checks."""
+    if not url or not isinstance(url, str):
         return url, None
     low = url.lower()
     if any(k in low for k in ["/track", "pixel.gif", "open.gif", "beacon.gif", "track.gif", "spacer.gif", "1x1"]):
         return url, None
+
+    # SSRF & private IP check
+    is_safe, _ = validate_url_safe(url)
+    if not is_safe:
+        return url, None
+
     try:
-        h = hashlib.md5(url.encode()).hexdigest()
+        h = hashlib.sha256(url.encode("utf-8")).hexdigest()
         ext = ".png" if ".png" in low else (".jpg" if ".jpg" in low or ".jpeg" in low else (".gif" if ".gif" in low else ".png"))
         target = os.path.join(CACHE_DIR, f"{h}{ext}")
         if os.path.exists(target) and os.path.getsize(target) > 0:
             return url, target
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"})
-        with urllib.request.urlopen(req, timeout=0.6) as resp:
-            data = resp.read()
-            if len(data) < 100:
+
+        opener = urllib.request.build_opener(SafeRedirectHandler())
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+        with opener.open(req, timeout=1.0) as resp:
+            # Enforce Content-Length header limit if present
+            cl = resp.headers.get("Content-Length")
+            if cl:
+                try:
+                    if int(cl) > MAX_IMAGE_SIZE or int(cl) < 16:
+                        return url, None
+                except ValueError:
+                    pass
+
+            chunks = []
+            total_size = 0
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_IMAGE_SIZE:
+                    return url, None  # Exceeded max size limit
+                chunks.append(chunk)
+
+            data = b"".join(chunks)
+            if len(data) < 16 or not is_valid_image_bytes(data):
                 return url, None
+
             with open(target, "wb") as f:
                 f.write(data)
         return url, target
@@ -173,19 +286,27 @@ class CleanEmailBuilder(HTMLParser):
             return
 
         if tag == "img":
-            src = attrs_dict.get("src", "")
+            src = attrs_dict.get("src", "").strip()
             local = self.img_map.get(src)
             if local and os.path.exists(local):
-                img_tag = get_scaled_img_tag(local, self.panel_width)
-                if img_tag:
-                    if self.in_cell:
-                        self.cell_buf.append(img_tag)
-                    else:
-                        self.out.append(img_tag)
+                real_local = os.path.realpath(local)
+                real_cache = os.path.realpath(CACHE_DIR)
+                if real_local.startswith(real_cache):
+                    img_tag = get_scaled_img_tag(real_local, self.panel_width)
+                    if img_tag:
+                        if self.in_cell:
+                            self.cell_buf.append(img_tag)
+                        else:
+                            self.out.append(img_tag)
         elif tag == "a":
-            href = attrs_dict.get("href", "")
-            self.current_link = href
-            link_tag = f'<a href="{html.escape(href)}">' if href else "<a>"
+            href = attrs_dict.get("href", "").strip()
+            # Only allow safe schemes: http, https, mailto
+            if href.startswith("http://") or href.startswith("https://") or href.startswith("mailto:"):
+                self.current_link = href
+                link_tag = f'<a href="{html.escape(href, quote=True)}">'
+            else:
+                self.current_link = None
+                link_tag = "<a>"
             if self.in_cell:
                 self.cell_buf.append(link_tag)
             else:
@@ -302,7 +423,8 @@ class CleanEmailBuilder(HTMLParser):
         t = data
         if not t.strip() and "\n" in t:
             return
-        t_clean = html.escape(t) if "<" not in t else t
+        # ALWAYS escape text data to prevent entity-encoded tag bypass
+        t_clean = html.escape(t, quote=True)
         if self.in_cell:
             self.cell_buf.append(t_clean)
         else:
@@ -323,10 +445,10 @@ def sanitize_and_enrich_html(raw_html, panel_width=360):
     if not raw_html:
         return ""
 
-    img_urls = re.findall(r"<img[^>]+src=[\"\x27](https?://[^\s\"\x27>]+)", raw_html, re.IGNORECASE)[:20]
+    img_urls = re.findall(r"<img[^>]+src=[\"\x27](https?://[^\s\"\x27>]+)", raw_html, re.IGNORECASE)[:10]
     img_map = {}
     if img_urls:
-        with ThreadPoolExecutor(max_workers=8) as ex:
+        with ThreadPoolExecutor(max_workers=4) as ex:
             img_map = dict(ex.map(download_image, set(img_urls)))
 
     builder = CleanEmailBuilder(img_map=img_map, panel_width=panel_width)
@@ -337,7 +459,7 @@ def text_to_rich_html(raw_text):
     """Convert plain text email into clean rich HTML with clickable links and markdown formatting."""
     if not raw_text:
         return ""
-    t = html.escape(raw_text)
+    t = html.escape(raw_text, quote=True)
     t = re.sub(r'(https?://[^\s<]+)', r'<a href="\1">\1</a>', t)
     t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
     t = re.sub(r'(?<!\*)\*([^\*\n]+)\*(?!\*)', r'<i>\1</i>', t)
