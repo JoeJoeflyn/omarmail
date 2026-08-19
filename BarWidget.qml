@@ -27,6 +27,10 @@ BarWidget {
     if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
   }
 
+  function openMessage(id) {
+    if (panelLoader.item && panelLoader.item.openMessage) panelLoader.item.openMessage(id)
+  }
+
   // Shape contract for shell.summon/hide/toggle routing.
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 

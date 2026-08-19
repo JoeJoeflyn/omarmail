@@ -422,16 +422,16 @@ Panel {
 
   // IPC
   IpcHandler {
-    target: root.ipcTarget
+    target: "omarmail"
 
-    function open(): void { root.openFromHotkey() }
-    function close(): void { root.close() }
-    function show(): void { root.openFromHotkey() }
-    function hide(): void { root.close() }
-    function toggle(): void { root.toggle() }
-    function refresh(): void { root.refresh() }
-    function openMessage(id: string): void {
-      root.controller.show()
+    function open() { root.openFromHotkey() }
+    function close() { root.close() }
+    function show() { root.openFromHotkey() }
+    function hide() { root.close() }
+    function toggle() { root.toggle() }
+    function refresh() { root.refresh() }
+    function openMessage(id: string) {
+      root.openFromHotkey()
       root.selectedId = id
       var found = null
       for (var i = 0; i < root.allEnvelopes.length; i++) {
@@ -1315,17 +1315,17 @@ Panel {
               topPadding: Style.space(4)
               bottomPadding: Style.space(16)
 
-              Text {
+              TextEdit {
                 id: bodyRichText
                 width: parent.width
                 text: root.currentDetail ? (root.currentDetail.body_html || root.currentDetail.body || "(No message text)") : ""
-                textFormat: Text.RichText
+                textFormat: TextEdit.RichText
+                readOnly: true
+                selectByMouse: true
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
-                lineHeight: 1.35
-                wrapMode: Text.Wrap
-                linkColor: Color.accent
+                wrapMode: TextEdit.Wrap
                 onLinkActivated: function(link) {
                   Qt.openUrlExternally(link)
                 }

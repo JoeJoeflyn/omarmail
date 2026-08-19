@@ -198,23 +198,32 @@ class CleanEmailBuilder(HTMLParser):
             target = self.cell_buf if self.in_cell else self.out
             target.append("<tt>")
         elif tag == "pre":
-            self.out.append('<pre style="margin: 6px 0; padding: 6px; background: rgba(255,255,255,0.06); border-radius: 4px;">')
+            target = self.cell_buf if self.in_cell else self.out
+            target.append('<pre style="margin: 6px 0; padding: 6px; background: rgba(255,255,255,0.06); border-radius: 4px;">')
         elif tag == "blockquote":
-            self.out.append('<blockquote style="border-left: 2px solid #666; margin: 6px 0; padding-left: 8px; color: #aaa;">')
+            target = self.cell_buf if self.in_cell else self.out
+            target.append('<blockquote style="border-left: 2px solid #666; margin: 6px 0; padding-left: 8px; color: #aaa;">')
         elif tag in ["h1", "h2", "h3", "h4", "h5", "h6"]:
-            self.out.append(f'<{tag} style="margin: 10px 0 4px 0;">')
+            target = self.cell_buf if self.in_cell else self.out
+            target.append(f'<{tag} style="margin: 10px 0 4px 0;">')
         elif tag == "p":
-            if not self.in_cell:
-                self.out.append('<p style="margin: 6px 0;">')
+            target = self.cell_buf if self.in_cell else self.out
+            target.append('<p style="margin: 6px 0; line-height: 1.45;">')
+        elif tag == "div":
+            target = self.cell_buf if self.in_cell else self.out
+            target.append('<div style="margin: 4px 0;">')
         elif tag == "br":
             target = self.cell_buf if self.in_cell else self.out
             target.append("<br>")
         elif tag == "hr":
-            self.out.append("<hr>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("<hr>")
         elif tag == "li":
-            self.out.append("<li>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("<li>")
         elif tag in ["ul", "ol"]:
-            self.out.append(f'<{tag} style="margin: 6px 0; padding-left: 18px;">')
+            target = self.cell_buf if self.in_cell else self.out
+            target.append(f'<{tag} style="margin: 6px 0; padding-left: 18px;">')
         elif tag in ["td", "th"]:
             self.in_cell = True
             self.cell_buf = []
@@ -245,18 +254,26 @@ class CleanEmailBuilder(HTMLParser):
             target = self.cell_buf if self.in_cell else self.out
             target.append("</tt>")
         elif tag == "pre":
-            self.out.append("</pre>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("</pre>")
         elif tag == "blockquote":
-            self.out.append("</blockquote>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("</blockquote>")
         elif tag in ["h1", "h2", "h3", "h4", "h5", "h6"]:
-            self.out.append(f"</{tag}>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append(f"</{tag}>")
         elif tag == "p":
-            if not self.in_cell:
-                self.out.append("</p>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("</p>")
+        elif tag == "div":
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("</div>")
         elif tag == "li":
-            self.out.append("</li>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append("</li>")
         elif tag in ["ul", "ol"]:
-            self.out.append(f"</{tag}>")
+            target = self.cell_buf if self.in_cell else self.out
+            target.append(f"</{tag}>")
         elif tag in ["td", "th"]:
             self.in_cell = False
             cell_text = "".join(self.cell_buf).strip()
