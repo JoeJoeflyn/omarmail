@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.parse
 
 REDIRECT_PORT = 8421
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}"
@@ -114,6 +115,17 @@ def main():
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            # Validate the state parameter matches what we sent — prevents
+            # CSRF attacks where an attacker feeds us a malicious redirect URI.
+            parsed = urllib.parse.urlsplit(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            returned_state = params.get("state", [""])[0]
+            if returned_state != state:
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Invalid state parameter")
+                return
             result["uri"] = f"http://localhost:{REDIRECT_PORT}{self.path}"
             self.send_response(200)
             self.send_header("Content-Type", "text/html")

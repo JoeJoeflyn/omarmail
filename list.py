@@ -63,12 +63,12 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if len(args) >= 1:
         try:
-            page_size = int(args[0])
+            page_size = max(1, min(100, int(args[0])))
         except ValueError:
             pass
     if len(args) >= 2:
         try:
-            page = int(args[1])
+            page = max(1, int(args[1]))
         except ValueError:
             pass
 

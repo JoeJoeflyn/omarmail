@@ -17,6 +17,8 @@ import sys
 import hashlib
 import struct
 import socket
+import ssl
+import http.client
 import ipaddress
 import urllib.request
 import urllib.parse
@@ -25,8 +27,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail/images")
 MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
-os.makedirs(CACHE_DIR, exist_ok=True)
-os.makedirs(MSG_CACHE_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+os.makedirs(MSG_CACHE_DIR, mode=0o700, exist_ok=True)
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB max per image
 
@@ -48,47 +50,44 @@ def is_safe_public_ip(ip_str):
     return True
 
 def validate_url_safe(url):
-    """Validate that a URL uses http/https, valid ports, and resolves strictly to public IPs."""
+    """Validate that a URL uses http/https, valid ports, and resolves strictly to public IPs.
+    Returns (is_safe, resolved_ip) where resolved_ip is the pinned IP to connect to,
+    preventing DNS rebinding between the check and the actual fetch."""
     if not url or not isinstance(url, str):
-        return False, "Invalid URL"
+        return False, None
     try:
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in ("http", "https"):
-            return False, "Invalid scheme"
+            return False, None
         host = parsed.hostname
         if not host:
-            return False, "Missing host"
+            return False, None
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if port not in (80, 443, 8080, 8443):
-            return False, "Non-standard port"
+            return False, None
 
         # Check if direct IP literal
         try:
             ip_obj = ipaddress.ip_address(host)
             if not is_safe_public_ip(str(ip_obj)):
-                return False, f"Private IP literal: {host}"
+                return False, None
+            return True, host  # Already an IP, pin it
         except ValueError:
-            pass  # Domain name
+            pass  # Domain name — resolve and pin
 
-        # Resolve DNS to check all target addresses
+        # Resolve DNS once and pin the first safe IP — the caller must use this
+        # IP for the actual connection to prevent DNS rebinding SSRF.
         addrs = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
         if not addrs:
-            return False, "DNS resolution failed"
+            return False, None
         for family, socktype, proto, canonname, sockaddr in addrs:
             ip = sockaddr[0]
             if not is_safe_public_ip(ip):
-                return False, f"Resolved to private IP: {ip}"
-        return True, "Safe"
-    except Exception as e:
-        return False, str(e)
-
-class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Disallow redirects to unsafe, private, or non-http URLs."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        is_safe, _ = validate_url_safe(newurl)
-        if not is_safe:
-            return None
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+                return False, None
+        # Return the first safe resolved IP for pinning
+        return True, addrs[0][4][0]
+    except Exception:
+        return False, None
 
 def is_valid_image_bytes(data):
     """Verify magic bytes for valid image formats."""
@@ -206,17 +205,22 @@ def get_scaled_img_tag(local_path, panel_width=360):
 
     return f'<img src="file://{local_path}" width="{min(lw, panel_width)}">'
 
-def download_image(url):
-    """Download and cache remote email images with SSRF protection, size limits, and magic-byte checks."""
+def download_image(url, _depth=0):
+    """Download and cache remote email images with SSRF protection, size limits, and magic-byte checks.
+    Pins the resolved IP to prevent DNS rebinding — the DNS check and actual
+    connection use the same IP, so a malicious DNS server can't return a public
+    IP for the check and a private IP for the fetch."""
     if not url or not isinstance(url, str):
+        return url, None
+    if _depth > 3:  # Redirect depth limit
         return url, None
     low = url.lower()
     if any(k in low for k in ["/track", "pixel.gif", "open.gif", "beacon.gif", "track.gif", "spacer.gif", "1x1"]):
         return url, None
 
-    # SSRF & private IP check
-    is_safe, _ = validate_url_safe(url)
-    if not is_safe:
+    # SSRF check — returns the pinned IP to connect to
+    is_safe, pinned_ip = validate_url_safe(url)
+    if not is_safe or not pinned_ip:
         return url, None
 
     try:
@@ -226,35 +230,74 @@ def download_image(url):
         if os.path.exists(target) and os.path.getsize(target) > 0:
             return url, target
 
-        opener = urllib.request.build_opener(SafeRedirectHandler())
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
-        with opener.open(req, timeout=1.0) as resp:
-            # Enforce Content-Length header limit if present
-            cl = resp.headers.get("Content-Length")
-            if cl:
-                try:
-                    if int(cl) > MAX_IMAGE_SIZE or int(cl) < 16:
-                        return url, None
-                except ValueError:
-                    pass
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        host = parsed.hostname
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
 
-            chunks = []
-            total_size = 0
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                total_size += len(chunk)
-                if total_size > MAX_IMAGE_SIZE:
-                    return url, None  # Exceeded max size limit
-                chunks.append(chunk)
+        # Connect to the pinned IP directly — no second DNS lookup.
+        # For HTTPS, set server_hostname to the original domain for SNI + cert verification.
+        if parsed.scheme == "https":
+            ctx = ssl.create_default_context()
+            conn = http.client.HTTPSConnection(pinned_ip, port, timeout=2.0, context=ctx)
+            sock = socket.create_connection((pinned_ip, port), timeout=2.0)
+            sock.settimeout(2.0)  # Read timeout on the socket itself
+            ssl_sock = ctx.wrap_socket(sock, server_hostname=host)
+            ssl_sock.settimeout(2.0)
+            conn.sock = ssl_sock
+            conn.request("GET", path, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                "Host": host,
+            })
+        else:
+            conn = http.client.HTTPConnection(pinned_ip, port, timeout=2.0)
+            conn.request("GET", path, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                "Host": host,
+            })
 
-            data = b"".join(chunks)
-            if len(data) < 16 or not is_valid_image_bytes(data):
+        resp = conn.getresponse()
+
+        # Follow redirects safely (recursive call does its own validate+pin+connect)
+        if resp.status in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location", "")
+            conn.close()
+            if location:
+                redirect_url = urllib.parse.urljoin(url, location)
+                return download_image(redirect_url, _depth + 1)
+            return url, None
+
+        # Enforce Content-Length header limit if present
+        cl = resp.headers.get("Content-Length")
+        if cl:
+            try:
+                if int(cl) > MAX_IMAGE_SIZE or int(cl) < 16:
+                    conn.close()
+                    return url, None
+            except ValueError:
+                pass
+
+        chunks = []
+        total_size = 0
+        while True:
+            chunk = resp.read(8192)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_IMAGE_SIZE:
+                conn.close()
                 return url, None
+            chunks.append(chunk)
+        conn.close()
 
-            with open(target, "wb") as f:
-                f.write(data)
+        data = b"".join(chunks)
+        if len(data) < 16 or not is_valid_image_bytes(data):
+            return url, None
+
+        with open(target, "wb") as f:
+            f.write(data)
         return url, target
     except Exception:
         return url, None
@@ -300,8 +343,9 @@ class CleanEmailBuilder(HTMLParser):
                             self.out.append(img_tag)
         elif tag == "a":
             href = attrs_dict.get("href", "").strip()
-            # Only allow safe schemes: http, https, mailto
-            if href.startswith("http://") or href.startswith("https://") or href.startswith("mailto:"):
+            # Only allow safe schemes (case-insensitive — HtTp:// is valid HTML)
+            href_lower = href.lower()
+            if href_lower.startswith("http://") or href_lower.startswith("https://") or href_lower.startswith("mailto:"):
                 self.current_link = href
                 link_tag = f'<a href="{html.escape(href, quote=True)}">'
             else:
@@ -477,17 +521,25 @@ def main():
         sys.exit(1)
 
     mid = sys.argv[1]
+    # Validate message ID — only allow alphanumeric, dash, underscore, dot
+    # Prevents path traversal via ../ in the cache filename
+    if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
+        print(json.dumps({"error": "Invalid message ID", "id": mid}))
+        sys.exit(1)
     force = "--force" in sys.argv
-    cache_file = os.path.join(MSG_CACHE_DIR, f"{mid}.json")
+    # Use basename to strip any path components as defense-in-depth
+    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}.json"))
 
-    # Fast path: instant return from cache
-    if not force and os.path.exists(cache_file):
+    # Fast path: instant return from cache (TOCTOU-safe — open directly)
+    if not force:
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached_data = f.read()
                 if cached_data.strip():
                     print(cached_data)
                     return
+        except FileNotFoundError:
+            pass
         except Exception:
             pass
 

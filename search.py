@@ -79,6 +79,13 @@ def main():
     page_size = sys.argv[2] if len(sys.argv) > 2 else "10"
     page_token = sys.argv[3] if len(sys.argv) > 3 else ""
 
+    # Validate page_size is a reasonable number
+    try:
+        ps = int(page_size)
+        page_size = str(max(1, min(100, ps)))
+    except ValueError:
+        page_size = "10"
+
     if not query:
         print(json.dumps({"envelopes": [], "next_page": ""}))
         return

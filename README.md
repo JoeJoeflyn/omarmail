@@ -125,3 +125,16 @@ omarchy-shell omarmail openMessage <id> # Open specific email detail
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## 🗑️ Removal
+
+Uninstall the plugin and clean up cached data:
+
+```bash
+omarchy plugin remove omarmail
+rm -rf ~/.cache/omarmail
+```
+
+Then remove `"omarmail"` from your status bar section in `~/.config/omarchy/shell.json`.
