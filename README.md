@@ -61,14 +61,29 @@ Add `"omarmail"` to your status bar section in `~/.config/omarchy/shell.json`:
 
 ## ⚡ Prerequisites
 
-Omarmail is powered by [`himalaya`](https://github.com/pimalaya/himalaya) for fast IMAP/SMTP communication.
+Omarmail is powered by [`himalaya`](https://github.com/pimalaya/himalaya) for IMAP and a **pinned** [`ortie`](https://github.com/pimalaya/ortie) release for Gmail OAuth. Use only the checksummed v2.2.0 assets below — not an unversioned remote installer.
 
 ### 1. Install Himalaya
 ```bash
 omarchy pkg add himalaya
 ```
 
-### 2. Configure Your Mailbox
+### 2. Install Ortie (Gmail OAuth only)
+
+Download [ortie v2.2.0](https://github.com/pimalaya/ortie/releases/tag/v2.2.0), verify the SHA-256, then extract into `~/.local/bin`. Skip this if you use IMAP with password auth.
+
+x86_64 Linux:
+
+```bash
+curl -sSL -o /tmp/ortie.tgz https://github.com/pimalaya/ortie/releases/download/v2.2.0/ortie.x86_64-linux.tgz
+echo '526972ac0b98eac66c943058de350c668d594e0898c8c6bb2d1b0348fafcdb52  /tmp/ortie.tgz' | sha256sum -c
+mkdir -p ~/.local/bin
+tar -xzf /tmp/ortie.tgz -C ~/.local/bin
+```
+
+aarch64 Linux: use `ortie.aarch64-linux.tgz` with sha256 `667586c32ec3d087a40418014f286f0b8912001d32deef94edf668a634d898c6`.
+
+### 3. Configure Your Mailbox
 Create or configure `~/.config/himalaya/config.toml`:
 
 ```toml

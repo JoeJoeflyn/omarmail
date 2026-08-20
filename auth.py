@@ -23,6 +23,15 @@ REDIRECT_PORT = 8421
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}"
 ACCOUNT = "gmail"
 
+# Pinned ortie release. Hashes are GitHub asset digests, stored here so install
+# guidance is bound to this plugin snapshot (not pimalaya/ortie master).
+ORTIE_VERSION = "v2.2.0"
+ORTIE_RELEASE = f"https://github.com/pimalaya/ortie/releases/tag/{ORTIE_VERSION}"
+ORTIE_LINUX_SHA256 = {
+    "x86_64": "526972ac0b98eac66c943058de350c668d594e0898c8c6bb2d1b0348fafcdb52",
+    "aarch64": "667586c32ec3d087a40418014f286f0b8912001d32deef94edf668a634d898c6",
+}
+
 ORTIE_CONFIG = """\
 # Ortie OAuth config for Gmail — written by Omarmail plugin.
 [accounts.gmail]
@@ -71,6 +80,24 @@ def ensure_configs():
         with open(himalaya_path, "w") as f:
             f.write(HIMALAYA_CONFIG)
 
+def print_ortie_install_hint():
+    """Print a pinned, checksummed install path — never pipe a mutable installer."""
+    machine = os.uname().machine
+    sha = ORTIE_LINUX_SHA256.get(machine)
+    print(f"  Install ortie {ORTIE_VERSION} from {ORTIE_RELEASE}")
+    if sha:
+        url = (
+            f"https://github.com/pimalaya/ortie/releases/download/"
+            f"{ORTIE_VERSION}/ortie.{machine}-linux.tgz"
+        )
+        print(f"  curl -sSL -o /tmp/ortie.tgz {url}")
+        print(f"  echo '{sha}  /tmp/ortie.tgz' | sha256sum -c")
+        print("  mkdir -p ~/.local/bin && tar -xzf /tmp/ortie.tgz -C ~/.local/bin")
+    else:
+        print("  Download the .tgz for your arch, verify the GitHub release digest,")
+        print("  then extract the binary into ~/.local/bin/")
+
+
 def check_dependencies():
     """Verify himalaya and ortie are installed."""
     for binary in ["himalaya", "ortie"]:
@@ -80,7 +107,7 @@ def check_dependencies():
             if binary == "himalaya":
                 print("  Install with: omarchy pkg add himalaya")
             else:
-                print("  Install with: curl -sSL https://raw.githubusercontent.com/pimalaya/ortie/master/install.sh | PREFIX=~/.local sh")
+                print_ortie_install_hint()
             sys.exit(1)
 
 def main():
