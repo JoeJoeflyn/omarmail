@@ -85,7 +85,17 @@ Column {
         Row {
           width: parent.width; spacing: Style.space(6)
           Text { textFormat: Text.PlainText; text: p.currentDetail && p.currentDetail.from_name ? p.currentDetail.from_name : (p.selectedEnvelope ? Model.senderName(p.selectedEnvelope) : "Unknown"); color: p.foreground; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight }
-          Text { textFormat: Text.PlainText; text: { var em = p.currentDetail && p.currentDetail.from_email ? p.currentDetail.from_email : (p.selectedEnvelope ? Model.senderEmail(p.selectedEnvelope) : ""); return em ? "<" + em + ">" : "" }; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+          Text {
+            textFormat: Text.PlainText
+            text: {
+              var em = p.currentDetail && p.currentDetail.from_email ? p.currentDetail.from_email : (p.selectedEnvelope ? Model.senderEmail(p.selectedEnvelope) : "")
+              return em ? "<" + em + ">" : ""
+            }
+            color: p.dim
+            font.family: p.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
         }
 
         Row {
