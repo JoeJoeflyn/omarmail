@@ -325,7 +325,7 @@ Panel {
     open: root.opened
     centerOnBar: false
     contentWidth: panel.fittedContentWidth(Style.space(420))
-    contentHeight: panel.fittedContentHeight(root.viewMode === "detail" ? Style.space(520) : Math.max(Style.space(280), mainContentCol.implicitHeight), Style.space(580))
+    contentHeight: panel.fittedContentHeight(Style.space(520), Style.space(580))
 
     PanelKeyCatcher {
       id: keyCatcher
