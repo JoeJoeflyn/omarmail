@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Backend: Himalaya](https://img.shields.io/badge/Backend-Himalaya-red)](https://github.com/pimalaya/himalaya)
 
-![Preview](assets/preview.png)
+<img width="546" height="771" alt="image" src="https://github.com/user-attachments/assets/80b49545-8dce-484d-ad31-b9ca834848f5" />
 
 ---
 
