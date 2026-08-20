@@ -135,14 +135,19 @@ Item {
   }
 
   // Scrollable Email Body — takes 100% of remaining vertical height cleanly!
-  Item {
+  BorderSurface {
     id: bodyContainer
     anchors.top: sep2.bottom
-    anchors.topMargin: Style.space(4)
+    anchors.topMargin: Style.space(6)
     anchors.left: parent.left
+    anchors.leftMargin: Style.space(8)
     anchors.right: parent.right
+    anchors.rightMargin: Style.space(8)
     anchors.bottom: parent.bottom
-    anchors.bottomMargin: Style.space(6)
+    anchors.bottomMargin: Style.space(8)
+    radius: Style.cornerRadius
+    color: Qt.rgba(1, 1, 1, 0.02)
+    borderSpec: Border.controlSpec("normal", p.foreground, Color.accent)
     clip: true
 
     // Loading State
@@ -156,14 +161,14 @@ Item {
     Flickable {
       id: bodyScroll
       visible: !p.loadingDetail; anchors.fill: parent
-      contentWidth: width; contentHeight: bodyCol.implicitHeight + Style.space(20)
+      contentWidth: width; contentHeight: bodyCol.implicitHeight + Style.space(24)
       clip: true; boundsBehavior: Flickable.StopAtBounds; interactive: contentHeight > height
       ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
       Column {
         id: bodyCol
         width: bodyScroll.width - Style.space(24); anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(10); topPadding: Style.space(4); bottomPadding: Style.space(16)
+        spacing: Style.space(10); topPadding: Style.space(10); bottomPadding: Style.space(16)
 
         TextEdit {
           width: parent.width
@@ -171,6 +176,9 @@ Item {
           textFormat: TextEdit.RichText; readOnly: true; selectByMouse: true
           color: p.foreground; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall
           wrapMode: TextEdit.Wrap
+          selectByKeyboard: true
+          selectionColor: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.4)
+          selectedTextColor: p.foreground
           onLinkActivated: function(link) { Qt.openUrlExternally(link) }
         }
       }

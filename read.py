@@ -354,7 +354,7 @@ class CleanEmailBuilder(HTMLParser):
             href_lower = href.lower()
             if href_lower.startswith("http://") or href_lower.startswith("https://") or href_lower.startswith("mailto:"):
                 self.current_link = href
-                link_tag = f'<a href="{html.escape(href, quote=True)}">'
+                link_tag = f'<a href="{html.escape(href, quote=True)}" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">'
             else:
                 self.current_link = None
                 link_tag = "<a>"
@@ -370,34 +370,34 @@ class CleanEmailBuilder(HTMLParser):
             target.append("<i>")
         elif tag in ["code", "tt"]:
             target = self.cell_buf if self.in_cell else self.out
-            target.append("<tt>")
+            target.append('<tt style="background: rgba(255,255,255,0.08); padding: 2px 4px; border-radius: 3px; font-family: monospace;">')
         elif tag == "pre":
             target = self.cell_buf if self.in_cell else self.out
-            target.append('<pre style="margin: 6px 0; padding: 6px; background: rgba(255,255,255,0.06); border-radius: 4px;">')
+            target.append('<pre style="margin: 8px 0; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-family: monospace;">')
         elif tag == "blockquote":
             target = self.cell_buf if self.in_cell else self.out
-            target.append('<blockquote style="border-left: 2px solid #666; margin: 6px 0; padding-left: 8px; color: #aaa;">')
+            target.append('<blockquote style="border-left: 3px solid #3b82f6; margin: 8px 0; padding: 6px 12px; background: rgba(59, 130, 246, 0.08); border-radius: 4px; color: #cbd5e1;">')
         elif tag in ["h1", "h2", "h3", "h4", "h5", "h6"]:
             target = self.cell_buf if self.in_cell else self.out
-            target.append(f'<{tag} style="margin: 10px 0 4px 0;">')
+            target.append(f'<{tag} style="margin: 12px 0 6px 0; font-weight: bold; color: #ffffff;">')
         elif tag == "p":
             target = self.cell_buf if self.in_cell else self.out
-            target.append('<p style="margin: 6px 0; line-height: 1.45;">')
+            target.append('<p style="margin: 8px 0; line-height: 1.5;">')
         elif tag == "div":
             target = self.cell_buf if self.in_cell else self.out
-            target.append('<div style="margin: 4px 0;">')
+            target.append('<div style="margin: 4px 0; line-height: 1.45;">')
         elif tag == "br":
             target = self.cell_buf if self.in_cell else self.out
             target.append("<br>")
         elif tag == "hr":
             target = self.cell_buf if self.in_cell else self.out
-            target.append("<hr>")
+            target.append('<hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 12px 0;">')
         elif tag == "li":
             target = self.cell_buf if self.in_cell else self.out
-            target.append("<li>")
+            target.append('<li style="margin: 4px 0;">')
         elif tag in ["ul", "ol"]:
             target = self.cell_buf if self.in_cell else self.out
-            target.append(f'<{tag} style="margin: 6px 0; padding-left: 18px;">')
+            target.append(f'<{tag} style="margin: 8px 0; padding-left: 20px;">')
         elif tag in ["td", "th"]:
             self.in_cell = True
             self.cell_buf = []
@@ -459,13 +459,13 @@ class CleanEmailBuilder(HTMLParser):
                 self.out.append(f'<div style="margin: 4px 0;">{self.row_cells[0]}</div>')
             elif len(self.row_cells) == 2:
                 c1, c2 = self.row_cells[0], self.row_cells[1]
-                self.out.append(f'<table width="100%" style="margin: 2px 0;"><tr><td style="color: #888888; padding-right: 8px;">{c1}</td><td style="text-align: right;">{c2}</td></tr></table>')
+                self.out.append(f'<table width="100%" cellpadding="4" cellspacing="0" style="margin: 4px 0;"><tr><td style="color: #94a3b8; padding: 4px 8px; vertical-align: top;">{c1}</td><td style="text-align: right; padding: 4px 8px; vertical-align: top;">{c2}</td></tr></table>')
             elif len(self.row_cells) > 2:
                 if all("<img" in c and len(re.sub(r"<[^>]+>", "", c).strip()) == 0 for c in self.row_cells):
                     pass
                 else:
-                    cells_html = "".join([f'<td style="padding: 2px 6px;">{c}</td>' for c in self.row_cells])
-                    self.out.append(f'<table width="100%" style="margin: 2px 0;"><tr>{cells_html}</tr></table>')
+                    cells_html = "".join([f'<td style="padding: 4px 8px; vertical-align: top; border-bottom: 1px solid rgba(255,255,255,0.06);">{c}</td>' for c in self.row_cells])
+                    self.out.append(f'<table width="100%" cellpadding="2" cellspacing="0" style="margin: 4px 0; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px;"><tr>{cells_html}</tr></table>')
             self.row_cells = []
 
     def handle_data(self, data):
