@@ -260,13 +260,13 @@ def download_image(url, _depth=0):
 
         resp = conn.getresponse()
 
-        # Follow redirects safely (recursive call does its own validate+pin+connect)
         if resp.status in (301, 302, 303, 307, 308):
             location = resp.headers.get("Location", "")
             conn.close()
             if location:
                 redirect_url = urllib.parse.urljoin(url, location)
-                return download_image(redirect_url, _depth + 1)
+                _, downloaded_target = download_image(redirect_url, _depth + 1)
+                return url, downloaded_target
             return url, None
 
         # Enforce Content-Length header limit if present
@@ -292,6 +292,10 @@ def download_image(url, _depth=0):
             chunks.append(chunk)
         conn.close()
 
+        data = b"".join(chunks)
+        if len(data) < 16 or not is_valid_image_bytes(data):
+            return url, None
+
         tmp_target = target + ".tmp"
         fd = os.open(tmp_target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with open(fd, "wb") as f:
@@ -310,94 +314,63 @@ def download_image(url, _depth=0):
         return url, None
 
 class CleanEmailBuilder(HTMLParser):
-    def __init__(self, img_map=None, panel_width=480):
+    def __init__(self, panel_width=660):
         super().__init__()
-        self.img_map = img_map or {}
         self.panel_width = panel_width
         self.out = []
-        self.in_skip = False
-        self.skip_tag = None
-        self.current_link = None
-        self.row_cells = []
+        self.skip_depth = 0
         self.in_cell = False
         self.cell_buf = []
+        self.row_cells = []
 
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
         tag = tag.lower()
-        if tag in ["style", "script", "head", "title"]:
-            self.in_skip = True
-            self.skip_tag = tag
-            return
-        if tag in ["meta", "link"]:
-            # Self-closing void elements — do NOT set in_skip!
-            return
-        if self.in_skip:
+        style = attrs_dict.get("style", "").lower()
+
+        # Self-closing void tags & images — skip completely
+        if tag in ["meta", "link", "base", "input", "img"]:
             return
 
-        if tag == "img":
-            src = attrs_dict.get("src", "").strip()
-            local = self.img_map.get(src)
-            if local and os.path.exists(local):
-                real_local = os.path.realpath(local)
-                real_cache = os.path.realpath(CACHE_DIR)
-                if real_local.startswith(real_cache):
-                    img_tag = get_scaled_img_tag(real_local, self.panel_width)
-                    if img_tag:
-                        if self.in_cell:
-                            self.cell_buf.append(img_tag)
-                        else:
-                            self.out.append(img_tag)
-        elif tag == "a":
+        # Paired tags to skip
+        if tag in ["style", "script", "head", "title", "noscript", "iframe"]:
+            self.skip_depth += 1
+            return
+        if "display: none" in style or "display:none" in style or "visibility: hidden" in style or "mso-hide: all" in style:
+            self.skip_depth += 1
+            return
+        if self.skip_depth > 0:
+            self.skip_depth += 1
+            return
+
+        if tag == "a":
             href = attrs_dict.get("href", "").strip()
-            # Only allow safe schemes (case-insensitive — HtTp:// is valid HTML)
-            href_lower = href.lower()
-            if href_lower.startswith("http://") or href_lower.startswith("https://") or href_lower.startswith("mailto:"):
-                self.current_link = href
-                link_tag = f'<a href="{html.escape(href, quote=True)}" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">'
+            if href.lower().startswith(("http://", "https://", "mailto:")):
+                (self.cell_buf if self.in_cell else self.out).append(f'<a href="{html.escape(href, quote=True)}" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">')
             else:
-                self.current_link = None
-                link_tag = "<a>"
-            if self.in_cell:
-                self.cell_buf.append(link_tag)
-            else:
-                self.out.append(link_tag)
+                (self.cell_buf if self.in_cell else self.out).append("<a>")
         elif tag in ["b", "strong"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("<b>")
+            (self.cell_buf if self.in_cell else self.out).append("<b>")
         elif tag in ["i", "em"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("<i>")
+            (self.cell_buf if self.in_cell else self.out).append("<i>")
         elif tag in ["code", "tt"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<tt style="background: rgba(255,255,255,0.08); padding: 2px 4px; border-radius: 3px; font-family: monospace;">')
+            (self.cell_buf if self.in_cell else self.out).append('<tt style="background: rgba(255,255,255,0.08); padding: 2px 4px; border-radius: 3px; font-family: monospace;">')
         elif tag == "pre":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<pre style="margin: 8px 0; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-family: monospace;">')
+            (self.cell_buf if self.in_cell else self.out).append('<pre style="margin: 8px 0; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-family: monospace;">')
         elif tag == "blockquote":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<blockquote style="border-left: 3px solid #3b82f6; margin: 8px 0; padding: 6px 12px; background: rgba(59, 130, 246, 0.08); border-radius: 4px; color: #cbd5e1;">')
+            (self.cell_buf if self.in_cell else self.out).append('<blockquote style="border-left: 3px solid #3b82f6; margin: 8px 0; padding: 6px 12px; background: rgba(59, 130, 246, 0.08); border-radius: 4px; color: #cbd5e1;">')
         elif tag in ["h1", "h2", "h3", "h4", "h5", "h6"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append(f'<{tag} style="margin: 12px 0 6px 0; font-weight: bold; color: #ffffff;">')
-        elif tag == "p":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<p style="margin: 8px 0; line-height: 1.5;">')
-        elif tag == "div":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<div style="margin: 4px 0; line-height: 1.45;">')
+            (self.cell_buf if self.in_cell else self.out).append(f'<{tag} style="margin: 12px 0 6px 0; font-weight: bold; color: #ffffff;">')
+        elif tag in ["p", "div"]:
+            (self.cell_buf if self.in_cell else self.out).append("<div>")
         elif tag == "br":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("<br>")
+            (self.cell_buf if self.in_cell else self.out).append("<br>")
         elif tag == "hr":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 12px 0;">')
+            (self.cell_buf if self.in_cell else self.out).append('<hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 12px 0;">')
         elif tag == "li":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append('<li style="margin: 4px 0;">')
+            (self.cell_buf if self.in_cell else self.out).append('<li style="margin: 4px 0;">')
         elif tag in ["ul", "ol"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append(f'<{tag} style="margin: 8px 0; padding-left: 20px;">')
+            (self.cell_buf if self.in_cell else self.out).append(f'<{tag} style="margin: 8px 0; padding-left: 20px;">')
         elif tag in ["td", "th"]:
             self.in_cell = True
             self.cell_buf = []
@@ -406,48 +379,32 @@ class CleanEmailBuilder(HTMLParser):
 
     def handle_endtag(self, tag):
         tag = tag.lower()
-        if tag in ["style", "script", "head", "title"]:
-            if self.skip_tag == tag or not self.skip_tag:
-                self.in_skip = False
-                self.skip_tag = None
+        if tag in ["meta", "link", "base", "input", "img"]:
             return
-        if self.in_skip:
+        if self.skip_depth > 0:
+            self.skip_depth -= 1
             return
 
         if tag == "a":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</a>")
-            self.current_link = None
+            (self.cell_buf if self.in_cell else self.out).append("</a>")
         elif tag in ["b", "strong"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</b>")
+            (self.cell_buf if self.in_cell else self.out).append("</b>")
         elif tag in ["i", "em"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</i>")
+            (self.cell_buf if self.in_cell else self.out).append("</i>")
         elif tag in ["code", "tt"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</tt>")
+            (self.cell_buf if self.in_cell else self.out).append("</tt>")
         elif tag == "pre":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</pre>")
+            (self.cell_buf if self.in_cell else self.out).append("</pre>")
         elif tag == "blockquote":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</blockquote>")
+            (self.cell_buf if self.in_cell else self.out).append("</blockquote>")
         elif tag in ["h1", "h2", "h3", "h4", "h5", "h6"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append(f"</{tag}>")
-        elif tag == "p":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</p>")
-        elif tag == "div":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</div>")
+            (self.cell_buf if self.in_cell else self.out).append(f"</{tag}>")
+        elif tag in ["p", "div"]:
+            (self.cell_buf if self.in_cell else self.out).append("</div>")
         elif tag == "li":
-            target = self.cell_buf if self.in_cell else self.out
-            target.append("</li>")
+            (self.cell_buf if self.in_cell else self.out).append("</li>")
         elif tag in ["ul", "ol"]:
-            target = self.cell_buf if self.in_cell else self.out
-            target.append(f"</{tag}>")
+            (self.cell_buf if self.in_cell else self.out).append(f"</{tag}>")
         elif tag in ["td", "th"]:
             self.in_cell = False
             cell_text = "".join(self.cell_buf).strip()
@@ -456,78 +413,103 @@ class CleanEmailBuilder(HTMLParser):
             self.cell_buf = []
         elif tag == "tr":
             if len(self.row_cells) == 1:
-                self.out.append(f'<div style="margin: 4px 0;">{self.row_cells[0]}</div>')
-            elif len(self.row_cells) == 2:
-                c1, c2 = self.row_cells[0], self.row_cells[1]
-                self.out.append(f'<table width="100%" cellpadding="4" cellspacing="0" style="margin: 4px 0;"><tr><td style="color: #94a3b8; padding: 4px 8px; vertical-align: top;">{c1}</td><td style="text-align: right; padding: 4px 8px; vertical-align: top;">{c2}</td></tr></table>')
-            elif len(self.row_cells) > 2:
-                if all("<img" in c and len(re.sub(r"<[^>]+>", "", c).strip()) == 0 for c in self.row_cells):
-                    pass
-                else:
-                    cells_html = "".join([f'<td style="padding: 4px 8px; vertical-align: top; border-bottom: 1px solid rgba(255,255,255,0.06);">{c}</td>' for c in self.row_cells])
-                    self.out.append(f'<table width="100%" cellpadding="2" cellspacing="0" style="margin: 4px 0; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px;"><tr>{cells_html}</tr></table>')
+                self.out.append(f'<div>{self.row_cells[0]}</div>')
+            elif len(self.row_cells) >= 2:
+                cells_html = "".join([f'<td style="padding: 4px 8px; vertical-align: top;">{c}</td>' for c in self.row_cells])
+                self.out.append(f'<table width="100%" cellpadding="2" cellspacing="0" style="margin: 4px 0;"><tr>{cells_html}</tr></table>')
             self.row_cells = []
 
     def handle_data(self, data):
-        if self.in_skip:
+        if self.skip_depth > 0:
             return
         t = data
-        if not t.strip() and "\n" in t:
+        t = re.sub(r'[\u2007\u034f\u200b\u200c\u200d\ufeff\u00ad]+', '', t)
+        if not t.strip():
             return
-        # ALWAYS escape text data to prevent entity-encoded tag bypass
         t_clean = html.escape(t, quote=True)
-        if self.in_cell:
-            self.cell_buf.append(t_clean)
-        else:
-            if t.strip():
-                self.out.append(t_clean)
+        (self.cell_buf if self.in_cell else self.out).append(t_clean)
 
     def get_html(self):
         res = "".join(self.out)
+        res = re.sub(r"<div>\s*<\/div>", "", res)
+        res = re.sub(r"(?:<div>\s*){2,}", "<div>", res)
+        res = re.sub(r"(?:<\/div>\s*){2,}", "</div>", res)
         res = re.sub(r"<h[1-6][^>]*>\s*<\/h[1-6]>", "", res)
         res = re.sub(r"<a[^>]*>\s*<\/a>", "", res)
         res = re.sub(r"<p[^>]*>\s*<\/p>", "", res)
-        res = re.sub(r"<div[^>]*>\s*<\/div>", "", res)
         res = re.sub(r"(?:<br\s*\/?>\s*){3,}", "<br><br>", res)
-        return res
+        return f'<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 13px; line-height: 1.55; color: #e2e8f0; width: 100%; word-break: break-word;">\n{res}\n</div>'
 
-def sanitize_and_enrich_html(raw_html, panel_width=360):
-    """Clean HTML for Qt Quick RichText, downloading images and adapting styling."""
+def sanitize_and_enrich_html(raw_html, panel_width=660):
+    """Clean HTML for Qt Quick RichText, formatting with robust pure-text reader style (no images)."""
     if not raw_html:
         return ""
-
-    img_urls = re.findall(r"<img[^>]+src=[\"\x27](https?://[^\s\"\x27>]+)", raw_html, re.IGNORECASE)[:10]
-    img_map = {}
-    if img_urls:
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            img_map = dict(ex.map(download_image, set(img_urls)))
-
-    builder = CleanEmailBuilder(img_map=img_map, panel_width=panel_width)
+    builder = CleanEmailBuilder(panel_width=panel_width)
     builder.feed(raw_html)
     return builder.get_html()
 
 def text_to_rich_html(raw_text):
-    """Convert plain text email into clean rich HTML with clickable links and markdown formatting."""
+    """Convert text/markdown email into clean, modern rich HTML with code blocks, quotes, headers, and links."""
     if not raw_text:
         return ""
-    t = html.escape(raw_text, quote=True)
-    t = re.sub(r'(https?://[^\s<]+)', r'<a href="\1">\1</a>', t)
-    t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
-    t = re.sub(r'(?<!\*)\*([^\*\n]+)\*(?!\*)', r'<i>\1</i>', t)
-    t = re.sub(r'`([^`]+)`', r'<tt>\1</tt>', t)
-    t = re.sub(r'(?m)^&gt;\s*(.*?)$', r'<blockquote style="border-left: 2px solid #666; margin: 4px 0; padding-left: 8px; color: #aaa;">\1</blockquote>', t)
-    t = re.sub(r'(?m)^[-*•]\s+(.*?)$', r'• \1', t)
-    t = re.sub(r'(?m)^#{1,3}\s+(.*?)$', r'<b>\1</b>', t)
-    paragraphs = t.split('\n\n')
-    formatted = ['<p style="margin: 0 0 10px 0; line-height: 1.4;">' + p.replace('\n', '<br>') + '</p>' for p in paragraphs if p.strip()]
-    return ''.join(formatted)
+
+    t = raw_text
+
+    # 1. Escape HTML special characters
+    t = html.escape(t, quote=True)
+
+    # 2. Markdown links [text](url)
+    t = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', r'<a href="\2" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">\1</a>', t)
+
+    # 3. Raw URLs
+    t = re.sub(r'(?<!href=\")(?<!\">)(https?://[^\s<>\)]+)', r'<a href="\1" style="color: #60a5fa; text-decoration: underline;">\1</a>', t)
+
+    # 4. Code blocks ```...```
+    def repl_cb(m):
+        code = m.group(1).strip()
+        return f'<pre style="margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; font-family: monospace; font-size: 12px; color: #f8fafc;">{code}</pre>'
+    t = re.sub(r'```(?:[a-zA-Z0-9_\-]+)?\n?(.*?)```', repl_cb, t, flags=re.DOTALL)
+
+    # 5. Inline code `...`
+    t = re.sub(r'`([^`\n]+)`', r'<tt style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-family: monospace; color: #38bdf8;">\1</tt>', t)
+
+    # 6. Bold & Italic
+    t = re.sub(r'\*\*([^\*\n]+)\*\*', r'<b style="color: #ffffff;">\1</b>', t)
+    t = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'<i>\1</i>', t)
+
+    # 7. Blockquotes > ...
+    t = re.sub(r'(?m)^&gt;\s*(.*?)$', r'<blockquote style="border-left: 3px solid #3b82f6; margin: 8px 0; padding: 6px 12px; background: rgba(59,130,246,0.08); border-radius: 4px; color: #cbd5e1;">\1</blockquote>', t)
+
+    # 8. Headers # ...
+    t = re.sub(r'(?m)^###\s+(.*?)$', r'<h4 style="margin: 12px 0 4px 0; color: #ffffff;">\1</h4>', t)
+    t = re.sub(r'(?m)^##\s+(.*?)$', r'<h3 style="margin: 14px 0 6px 0; color: #ffffff;">\1</h3>', t)
+    t = re.sub(r'(?m)^#\s+(.*?)$', r'<h2 style="margin: 16px 0 8px 0; color: #ffffff;">\1</h2>', t)
+
+    # 9. Bullet points
+    t = re.sub(r'(?m)^[-*•]\s+(.*?)$', r'<div style="margin: 3px 0; padding-left: 14px;">• \1</div>', t)
+
+    # 10. Paragraphs
+    paras = t.split('\n\n')
+    out = []
+    for p in paras:
+        ps = p.strip()
+        if not ps:
+            continue
+        if ps.startswith('<pre') or ps.startswith('<blockquote') or ps.startswith('<h') or ps.startswith('<div'):
+            out.append(ps)
+        else:
+            out.append('<p style="margin: 8px 0; line-height: 1.55;">' + ps.replace('\n', '<br>') + '</p>')
+
+    res = '\n'.join(out)
+    return f'<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 13px; line-height: 1.55; color: #e2e8f0; width: 100%; word-break: break-word;">\n{res}\n</div>'
 
 def main():
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
         print(json.dumps({"error": "No message ID provided"}))
         sys.exit(1)
 
-    mid = sys.argv[1]
+    mid = args[0]
     # Validate message ID — only allow alphanumeric, dash, underscore, dot
     # Prevents path traversal via ../ in the cache filename
     if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
@@ -595,13 +577,17 @@ def main():
             })
 
     body_html = ""
-    raw_text = ""
-
-    # Prefer HTML part for rich view
+    # Pure clean text reader strategy (zero images, pure crisp typography):
+    # 1. If clean text/markdown is available (> 30 chars), format into crisp reader cards
+    #    (perfect for GitHub comments, CodeRabbit reviews, Linear, and notifications)
+    # 2. Otherwise if HTML is available, format into clean typography (no images)
     html_parts = [p for p in parts if p.get("body", {}).get("Html")]
     text_parts = [p for p in parts if p.get("body", {}).get("Text")]
 
-    if html_parts:
+    if text_parts and text_parts[0]["body"].get("Text") and len(text_parts[0]["body"]["Text"].strip()) > 30:
+        raw_text = text_parts[0]["body"]["Text"]
+        body_html = text_to_rich_html(raw_text)
+    elif html_parts:
         raw_html = html_parts[0]["body"]["Html"]
         body_html = sanitize_and_enrich_html(raw_html)
     elif text_parts:
@@ -631,6 +617,34 @@ def main():
     else:
         from_initials = "?"
 
+    avatar_url = ""
+    raw_html_content = html_parts[0]["body"]["Html"] if html_parts else ""
+
+    # Check for GitHub user avatar
+    is_github = any(
+        "github.com" in (f.get("email", "") if isinstance(f, dict) else str(f)).lower()
+        for f in from_list
+    ) or "github" in from_name.lower()
+
+    if is_github and raw_html_content:
+        github_avatars = re.findall(r'<img[^>]+src=[\"\'](https?://avatars\.githubusercontent\.com/[^\s\"\'>]+)', raw_html_content, re.IGNORECASE)
+        target_avatar = None
+        if github_avatars:
+            target_avatar = html.unescape(github_avatars[0])
+            target_avatar = re.sub(r's=\d+', 's=80', target_avatar)
+        elif from_name and from_name not in ["Unknown", "GitHub", "notifications"]:
+            clean_user = re.sub(r'[^a-zA-Z0-9_\-]', '', from_name.split()[0])
+            if clean_user:
+                target_avatar = f"https://github.com/{clean_user}.png?size=80"
+
+        if target_avatar:
+            _, local_avatar = download_image(target_avatar)
+            if local_avatar and os.path.exists(local_avatar):
+                real_av = os.path.realpath(local_avatar)
+                real_cache = os.path.realpath(CACHE_DIR)
+                if real_av.startswith(real_cache):
+                    avatar_url = f"file://{real_av}"
+
     output = {
         "id": mid,
         "subject": subject_str or "(No Subject)",
@@ -638,6 +652,7 @@ def main():
         "from_name": from_name,
         "from_email": from_email,
         "from_initials": from_initials,
+        "avatar_url": avatar_url,
         "to": to_list,
         "cc": cc_list,
         "date": date_str,

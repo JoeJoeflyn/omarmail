@@ -99,15 +99,20 @@ Panel {
   }
 
   // ---- Data Actions
+  function fetchPage(page) {
+    currentPage = page
+    listProc.running = false
+    listProc.command = ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), String(pageSize), String(currentPage)]
+    listProc.running = true
+  }
+
   function refresh() {
     if (searchMode && !gmailSearch && searchQuery !== "") {
-      currentPage = 1
-      if (!listProc.running) listProc.running = true
+      fetchPage(1)
     } else if (gmailSearch) {
       runSearch(searchQuery, "")
     } else {
-      currentPage = 1
-      if (!listProc.running) listProc.running = true
+      fetchPage(1)
     }
     if (viewMode === "detail" && selectedId !== "") readMessage(selectedId)
   }
@@ -132,19 +137,22 @@ Panel {
 
   function nextPage() {
     if (gmailSearch) { if (searchNextPage !== "") runSearch(searchQuery, searchNextPage) }
-    else { currentPage++; listProc.command = ["himalaya", "envelope", "list", "--json", "-s", String(pageSize), "-p", String(currentPage)]; listProc.running = true }
+    else { fetchPage(currentPage + 1) }
   }
 
   function prevPage() {
     if (gmailSearch) return
-    if (currentPage > 1) { currentPage--; listProc.command = ["himalaya", "envelope", "list", "--json", "-s", String(pageSize), "-p", String(currentPage)]; listProc.running = true }
+    if (currentPage > 1) { fetchPage(currentPage - 1) }
   }
 
   function openDetail(env) {
     if (!env || !env.id) return
     selectedId = env.id; selectedEnvelope = env; viewMode = "detail"
     readMessage(env.id)
-    if (!Model.isSeen(env)) markRead(env.id)
+    if (!Model.isSeen(env)) {
+      localSetSeen(env.id, true)
+      markRead(env.id)
+    }
   }
 
   function backToInbox() {
@@ -157,13 +165,29 @@ Panel {
     readProc.running = true
   }
 
-  function markRead(id) { pendingFlagId = id; flagProc.running = false; flagProc.command = ["himalaya", "flag", "add", "-f", "seen", id]; flagProc.running = true }
-  function markUnread(id) { pendingFlagId = id; flagProc.running = false; flagProc.command = ["himalaya", "flag", "remove", "-f", "seen", id]; flagProc.running = true }
+  function markRead(id) {
+    pendingFlagId = id
+    localSetSeen(id, true)
+    flagProc.running = false
+    flagProc.command = ["python3", Qt.resolvedUrl("action.py").toString().replace("file://", ""), "mark_read", id]
+    flagProc.running = true
+  }
+
+  function markUnread(id) {
+    pendingFlagId = id
+    localSetSeen(id, false)
+    flagProc.running = false
+    flagProc.command = ["python3", Qt.resolvedUrl("action.py").toString().replace("file://", ""), "mark_unread", id]
+    flagProc.running = true
+  }
+
   function toggleSeen(id, currentSeen) { if (currentSeen) markUnread(id); else markRead(id) }
 
   function deleteMessage(id) {
     pendingMoveId = id; moveProc.running = false
-    moveProc.command = ["himalaya", "message", "move", "--to", "Trash", id]; moveProc.running = true
+    localRemove(id)
+    moveProc.command = ["python3", Qt.resolvedUrl("action.py").toString().replace("file://", ""), "delete", id]
+    moveProc.running = true
     if (viewMode === "detail" && selectedId === id) backToInbox()
   }
 
@@ -171,14 +195,14 @@ Panel {
 
   function startAuth() { authInProgress = true; needsAuth = false; errorMsg = ""; authProc.running = true }
 
-  function localToggleSeen(id) {
+  function localSetSeen(id, seen) {
     var updated = []
     for (var i = 0; i < allEnvelopes.length; i++) {
       var env = allEnvelopes[i]
       if (env.id === id) {
         var flags = env.flags || []
-        if (Model.isSeen(env)) { flags = flags.filter(function(f) { var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : ""); return n !== "seen" }) }
-        else { flags.push({raw: "\\Seen", iana: "seen"}) }
+        flags = flags.filter(function(f) { var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : ""); return n !== "seen" })
+        if (seen) { flags.push({raw: "\\Seen", iana: "seen"}) }
         env.flags = flags
         if (selectedEnvelope && selectedEnvelope.id === id) selectedEnvelope.flags = flags
       }
@@ -186,6 +210,14 @@ Panel {
     }
     allEnvelopes = updated
     envelopes = searchMode && !gmailSearch ? Model.fuzzyFilter(allEnvelopes, searchQuery) : allEnvelopes
+  }
+
+  function localToggleSeen(id) {
+    var current = false
+    for (var i = 0; i < allEnvelopes.length; i++) {
+      if (allEnvelopes[i].id === id) { current = Model.isSeen(allEnvelopes[i]); break }
+    }
+    localSetSeen(id, !current)
   }
 
   function localRemove(id) {
@@ -287,14 +319,28 @@ Panel {
 
   Process {
     id: flagProc
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { var raw = String(text || "").trim(); if (raw && raw.indexOf("Successfully") < 0) root.errorMsg = raw } }
-    onExited: function(exitCode) { if (exitCode === 0) root.localToggleSeen(root.pendingFlagId) }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var res = JSON.parse(String(text || "{}"))
+          if (!res.success && res.error) root.errorMsg = res.error
+        } catch (e) {}
+      }
+    }
   }
 
   Process {
     id: moveProc
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { var raw = String(text || "").trim(); if (raw && raw.indexOf("successfully") < 0) root.errorMsg = raw } }
-    onExited: function(exitCode) { if (exitCode === 0) root.localRemove(root.pendingMoveId) }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var res = JSON.parse(String(text || "{}"))
+          if (!res.success && res.error) root.errorMsg = res.error
+        } catch (e) {}
+      }
+    }
   }
 
   Timer { id: refreshTimer; interval: 60000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
@@ -324,8 +370,10 @@ Panel {
     bar: root.bar
     open: root.opened
     centerOnBar: false
-    contentWidth: panel.fittedContentWidth(Style.space(540))
-    contentHeight: panel.fittedContentHeight(Style.space(600), Style.space(680))
+    contentWidth: panel.fittedContentWidth(Style.space(720))
+    contentHeight: root.viewMode === "detail"
+      ? panel.fittedContentHeight(Style.space(680), Style.space(800))
+      : panel.fittedContentHeight(Math.max(Style.space(360), Math.min(mainContentCol.contentHeight + Style.space(16), Style.space(620))), Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -356,6 +404,15 @@ Panel {
         else if (t === "d" || t === "D") {
           if (root.viewMode === "detail" && root.selectedEnvelope) root.deleteMessage(root.selectedEnvelope.id)
           else if (root.viewMode === "inbox" && root.envelopes[root.cursorIndex]) root.deleteMessage(root.envelopes[root.cursorIndex].id)
+        }
+        else if (t === "o" || t === "O") {
+          if (root.viewMode === "detail" && root.selectedId) root.openInGmail(root.selectedId)
+        }
+        else if (t === "n" || t === "N" || t === "]") {
+          if (root.viewMode === "inbox") root.nextPage()
+        }
+        else if (t === "p" || t === "P" || t === "[") {
+          if (root.viewMode === "inbox") root.prevPage()
         }
       }
 
