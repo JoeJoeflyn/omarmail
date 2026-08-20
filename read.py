@@ -292,18 +292,25 @@ def download_image(url, _depth=0):
             chunks.append(chunk)
         conn.close()
 
-        data = b"".join(chunks)
-        if len(data) < 16 or not is_valid_image_bytes(data):
-            return url, None
-
-        with open(target, "wb") as f:
+        tmp_target = target + ".tmp"
+        fd = os.open(tmp_target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "wb") as f:
             f.write(data)
+        try:
+            os.chmod(tmp_target, 0o600)
+        except Exception:
+            pass
+        os.replace(tmp_target, target)
+        try:
+            os.chmod(target, 0o600)
+        except Exception:
+            pass
         return url, target
     except Exception:
         return url, None
 
 class CleanEmailBuilder(HTMLParser):
-    def __init__(self, img_map=None, panel_width=360):
+    def __init__(self, img_map=None, panel_width=480):
         super().__init__()
         self.img_map = img_map or {}
         self.panel_width = panel_width
@@ -643,8 +650,19 @@ def main():
     }
 
     try:
-        with open(cache_file, "w", encoding="utf-8") as f:
+        tmp_file = cache_file + ".tmp"
+        fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "w", encoding="utf-8") as f:
             json.dump(output, f, ensure_ascii=False)
+        try:
+            os.chmod(tmp_file, 0o600)
+        except Exception:
+            pass
+        os.replace(tmp_file, cache_file)
+        try:
+            os.chmod(cache_file, 0o600)
+        except Exception:
+            pass
     except Exception:
         pass
 

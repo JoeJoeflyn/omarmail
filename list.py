@@ -11,7 +11,11 @@ import subprocess
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
 INBOX_CACHE = os.path.join(CACHE_DIR, "inbox_cache.json")
-os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+try:
+    os.chmod(CACHE_DIR, 0o700)
+except Exception:
+    pass
 
 def get_cached_envelopes():
     if os.path.exists(INBOX_CACHE):
@@ -28,8 +32,24 @@ def get_cached_envelopes():
 
 def save_cache(envelopes):
     try:
-        with open(INBOX_CACHE, "w", encoding="utf-8") as f:
+        os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(CACHE_DIR, 0o700)
+        except Exception:
+            pass
+        tmp_file = INBOX_CACHE + ".tmp"
+        fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "w", encoding="utf-8") as f:
             json.dump(envelopes, f, ensure_ascii=False)
+        try:
+            os.chmod(tmp_file, 0o600)
+        except Exception:
+            pass
+        os.replace(tmp_file, INBOX_CACHE)
+        try:
+            os.chmod(INBOX_CACHE, 0o600)
+        except Exception:
+            pass
     except Exception:
         pass
 

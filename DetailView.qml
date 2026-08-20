@@ -4,19 +4,20 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Email detail view — top nav, header card, scrollable body
-Column {
+// Email detail view — anchored responsive layout for full dynamic vertical expansion
+Item {
   id: root
   property var p  // Panel root
 
   visible: p.viewMode === "detail"
   anchors.fill: parent
-  spacing: Style.space(8)
 
   // Top Navigation Bar
   Item {
     id: topNav
-    width: parent.width
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
     implicitHeight: Math.max(backBtn.implicitHeight, actions.implicitHeight) + Style.space(4)
 
     Button {
@@ -54,12 +55,24 @@ Column {
     }
   }
 
-  PanelSeparator { id: sep1; foreground: p.foreground }
+  PanelSeparator {
+    id: sep1
+    anchors.top: topNav.bottom
+    anchors.topMargin: Style.space(4)
+    anchors.left: parent.left
+    anchors.right: parent.right
+    foreground: p.foreground
+  }
 
   // Email Header Card
   Column {
     id: headerCard
-    width: parent.width - Style.space(24); anchors.horizontalCenter: parent.horizontalCenter
+    anchors.top: sep1.bottom
+    anchors.topMargin: Style.space(8)
+    anchors.left: parent.left
+    anchors.leftMargin: Style.space(12)
+    anchors.right: parent.right
+    anchors.rightMargin: Style.space(12)
     spacing: Style.space(6)
 
     Text {
@@ -112,23 +125,34 @@ Column {
     }
   }
 
-  PanelSeparator { id: sep2; foreground: p.foreground }
+  PanelSeparator {
+    id: sep2
+    anchors.top: headerCard.bottom
+    anchors.topMargin: Style.space(8)
+    anchors.left: parent.left
+    anchors.right: parent.right
+    foreground: p.foreground
+  }
 
-  // Scrollable Email Body
+  // Scrollable Email Body — takes 100% of remaining vertical height cleanly!
   Item {
     id: bodyContainer
-    width: parent.width
-    height: Math.max(Style.space(220), p.keyCatcherHeight - topNav.implicitHeight - sep1.implicitHeight - headerCard.implicitHeight - sep2.implicitHeight - root.spacing * 5)
+    anchors.top: sep2.bottom
+    anchors.topMargin: Style.space(4)
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.bottomMargin: Style.space(6)
     clip: true
 
-    // Loading
+    // Loading State
     Column {
       visible: p.loadingDetail; anchors.centerIn: parent; spacing: Style.space(8)
       Text { text: "\uf110"; color: Color.accent; font.family: p.fontFamily; font.pixelSize: Style.font.display; anchors.horizontalCenter: parent.horizontalCenter; RotationAnimator on rotation { running: p.loadingDetail; from: 0; to: 360; duration: 900; loops: Animation.Infinite } }
       Text { textFormat: Text.PlainText; text: "Loading email content..."; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.caption; anchors.horizontalCenter: parent.horizontalCenter }
     }
 
-    // Body
+    // Scrollable Body
     Flickable {
       id: bodyScroll
       visible: !p.loadingDetail; anchors.fill: parent
