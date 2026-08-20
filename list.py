@@ -53,13 +53,46 @@ def save_cache(envelopes):
     except Exception:
         pass
 
+import tempfile
+
+def run_himalaya_safe(cmd, timeout=12.0):
+    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
+         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
+        tmp_out_name = tmp_out.name
+        tmp_err_name = tmp_err.name
+        try:
+            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+                return "", "Request timed out", 1
+
+            tmp_out.seek(0)
+            out = tmp_out.read().strip()
+            tmp_err.seek(0)
+            err = tmp_err.read().strip()
+            return out, err, proc.returncode
+        finally:
+            try:
+                os.unlink(tmp_out_name)
+            except Exception:
+                pass
+            try:
+                os.unlink(tmp_err_name)
+            except Exception:
+                pass
+
 def fetch_envelopes(page_size=30, page=1):
     cmd = ["himalaya", "envelope", "list", "--json", "-s", str(page_size), "-p", str(page)]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=12.0)
-        out = res.stdout.strip()
-        err = res.stderr.strip()
-        if res.returncode == 0 and out:
+        out, err, code = run_himalaya_safe(cmd, timeout=12.0)
+        if code == 0 and out:
             try:
                 data = json.loads(out)
                 envelopes = data.get("envelopes", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
@@ -70,8 +103,6 @@ def fetch_envelopes(page_size=30, page=1):
                 return {"envelopes": [], "error": f"JSON parse error: {e}"}
         else:
             return {"envelopes": [], "error": err or "Failed to list envelopes"}
-    except subprocess.TimeoutExpired:
-        return {"envelopes": [], "error": "Request timed out"}
     except Exception as e:
         return {"envelopes": [], "error": str(e)}
 

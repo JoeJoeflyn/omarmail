@@ -44,6 +44,41 @@ def remove_from_cache(mid):
     except Exception:
         pass
 
+import tempfile
+
+def run_himalaya_safe(cmd, timeout=12.0):
+    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
+         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
+        tmp_out_name = tmp_out.name
+        tmp_err_name = tmp_err.name
+        try:
+            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+                return "", "Action timed out", 1
+
+            tmp_out.seek(0)
+            out = tmp_out.read().strip()
+            tmp_err.seek(0)
+            err = tmp_err.read().strip()
+            return out, err, proc.returncode
+        finally:
+            try:
+                os.unlink(tmp_out_name)
+            except Exception:
+                pass
+            try:
+                os.unlink(tmp_err_name)
+            except Exception:
+                pass
+
 def main():
     if len(sys.argv) < 3:
         print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete> <id>"}))
@@ -66,13 +101,11 @@ def main():
         sys.exit(1)
 
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10.0)
-        if res.returncode == 0:
+        out, err, code = run_himalaya_safe(cmd, timeout=12.0)
+        if code == 0:
             print(json.dumps({"success": True, "id": mid, "action": action}))
         else:
-            print(json.dumps({"success": False, "error": res.stderr.strip() or "Himalaya error", "id": mid}))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({"success": False, "error": "Action timed out", "id": mid}))
+            print(json.dumps({"success": False, "error": err or "Himalaya error", "id": mid}))
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e), "id": mid}))
 

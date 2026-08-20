@@ -101,9 +101,8 @@ Panel {
   // ---- Data Actions
   function fetchPage(page) {
     currentPage = page
-    listProc.running = false
     listProc.command = ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), String(pageSize), String(currentPage)]
-    listProc.running = true
+    if (!listProc.running) listProc.running = true
   }
 
   function refresh() {

@@ -9,10 +9,41 @@ Output: JSON array of envelopes on stdout, same shape as `envelope list --json`.
 import json
 import subprocess
 import sys
+import os
+import tempfile
 
-def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.stdout.strip(), r.stderr.strip(), r.returncode
+def run(cmd, timeout=15.0):
+    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
+         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
+        tmp_out_name = tmp_out.name
+        tmp_err_name = tmp_err.name
+        try:
+            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+                return "", "Search timed out", 1
+
+            tmp_out.seek(0)
+            out = tmp_out.read().strip()
+            tmp_err.seek(0)
+            err = tmp_err.read().strip()
+            return out, err, proc.returncode
+        finally:
+            try:
+                os.unlink(tmp_out_name)
+            except Exception:
+                pass
+            try:
+                os.unlink(tmp_err_name)
+            except Exception:
+                pass
 
 def extract_header_value(val):
     if isinstance(val, dict):

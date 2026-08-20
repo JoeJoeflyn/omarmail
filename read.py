@@ -532,7 +532,42 @@ def main():
         except Exception:
             pass
 
-    out, err, code = run(["himalaya", "message", "read", "--json", mid])
+import tempfile
+
+def run_himalaya_safe(cmd, timeout=15.0):
+    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
+         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
+        tmp_out_name = tmp_out.name
+        tmp_err_name = tmp_err.name
+        try:
+            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+                return "", "Request timed out", 1
+
+            tmp_out.seek(0)
+            out = tmp_out.read().strip()
+            tmp_err.seek(0)
+            err = tmp_err.read().strip()
+            return out, err, proc.returncode
+        finally:
+            try:
+                os.unlink(tmp_out_name)
+            except Exception:
+                pass
+            try:
+                os.unlink(tmp_err_name)
+            except Exception:
+                pass
+
+    out, err, code = run_himalaya_safe(["himalaya", "message", "read", "--json", mid])
     if code != 0 or not out:
         print(json.dumps({"error": err or "Failed to read message", "id": mid}))
         sys.exit(0)
