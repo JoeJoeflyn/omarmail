@@ -246,7 +246,12 @@ Panel {
 
   function localRemove(id) {
     allEnvelopes = allEnvelopes.filter(function(env) { return env.id !== id })
-    envelopes = searchMode && !gmailSearch ? Model.fuzzyFilter(allEnvelopes, searchQuery) : allEnvelopes
+    envelopes = envelopes.filter(function(env) { return env.id !== id })
+    if (selectedId === id) {
+      selectedId = ""
+      selectedEnvelope = null
+      currentDetail = null
+    }
   }
 
   // ---- Processes

@@ -29,20 +29,27 @@ def update_cache_flag(mid, seen=True):
     except Exception:
         pass
 
+MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
+
 def remove_from_cache(mid):
-    if not os.path.exists(INBOX_CACHE):
-        return
-    try:
-        with open(INBOX_CACHE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        envelopes = data if isinstance(data, list) else data.get("envelopes", [])
-        envelopes = [e for e in envelopes if e.get("id") != mid]
-        tmp = INBOX_CACHE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(envelopes, f, ensure_ascii=False)
-        os.replace(tmp, INBOX_CACHE)
-    except Exception:
-        pass
+    if os.path.exists(INBOX_CACHE):
+        try:
+            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            envelopes = data if isinstance(data, list) else data.get("envelopes", [])
+            envelopes = [e for e in envelopes if e.get("id") != mid]
+            tmp = INBOX_CACHE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(envelopes, f, ensure_ascii=False)
+            os.replace(tmp, INBOX_CACHE)
+        except Exception:
+            pass
+    msg_file = os.path.join(MSG_CACHE_DIR, f"{mid}.json")
+    if os.path.exists(msg_file):
+        try:
+            os.remove(msg_file)
+        except Exception:
+            pass
 
 import tempfile
 
@@ -102,7 +109,26 @@ def main():
         cmd = ["himalaya", "flag", "remove", "-f", "seen", "--", mid]
     elif action == "delete":
         remove_from_cache(mid)
-        cmd = ["himalaya", "message", "move", "--to", "Trash", "--", mid]
+        candidates = [
+            ["himalaya", "message", "move", "--to", "TRASH", "--", mid],
+            ["himalaya", "message", "move", "--to", "Trash", "--", mid],
+            ["himalaya", "message", "move", "--to", "trash", "--", mid],
+            ["himalaya", "message", "move", "--to", "[Gmail]/Trash", "--", mid],
+            ["himalaya", "flag", "add", "-f", "deleted", "--", mid],
+        ]
+        success = False
+        last_err = ""
+        for c in candidates:
+            out, err, code = run_himalaya_safe(c, timeout=10.0)
+            if code == 0:
+                success = True
+                break
+            last_err = err or out
+        if success:
+            print(json.dumps({"success": True, "id": mid, "action": action}))
+        else:
+            print(json.dumps({"success": False, "error": last_err or "Failed to delete message", "id": mid}))
+        sys.exit(0)
     else:
         print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
         sys.exit(1)
