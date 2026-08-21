@@ -453,30 +453,31 @@ def text_to_rich_html(raw_text):
     if not raw_text:
         return ""
 
-    t = raw_text
+    # Normalize CRLF / CR linebreaks
+    t = raw_text.replace('\r\n', '\n').replace('\r', '\n')
 
     # 1. Strip raw HTML comments <!-- ... -->
     t = re.sub(r'<!--.*?-->', '', t, flags=re.DOTALL)
 
     # 2. Markdown tables
     def format_table(match):
-        lines = [l.strip() for l in match.group(0).strip().split('\n') if l.strip()]
+        raw_tbl = match.group(0).strip()
+        lines = [l.strip() for l in raw_tbl.split('\n') if l.strip()]
         if len(lines) < 2:
-            return match.group(0)
+            return raw_tbl
         headers = [c.strip() for c in lines[0].strip('|').split('|')]
         rows = []
         for l in lines[2:]:
             cols = [c.strip() for c in l.strip('|').split('|')]
             rows.append(cols)
-        th_html = "".join([f'<th style="border: 1px solid rgba(255,255,255,0.12); padding: 8px 12px; background: rgba(255,255,255,0.06); color: #f8fafc; font-weight: 600; text-align: left;">{html.escape(h)}</th>' for h in headers])
+        th_html = "".join([f'<th style="border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; background: rgba(255,255,255,0.08); color: #ffffff; font-weight: 600; text-align: left;">{html.escape(h)}</th>' for h in headers])
         tr_html = []
         for r in rows:
-            td_html = "".join([f'<td style="border: 1px solid rgba(255,255,255,0.08); padding: 6px 12px; color: #cbd5e1;">{html.escape(c)}</td>' for c in r])
-            tr_html.append(f'<tr style="background: rgba(0,0,0,0.1);">{td_html}</tr>')
+            td_html = "".join([f'<td style="border: 1px solid rgba(255,255,255,0.08); padding: 7px 12px; color: #cbd5e1;">{html.escape(c)}</td>' for c in r])
+            tr_html.append(f'<tr style="background: rgba(0,0,0,0.15);">{td_html}</tr>')
         return f'<table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12);"><thead><tr>{th_html}</tr></thead><tbody>{"".join(tr_html)}</tbody></table>'
 
     table_pattern = r'(?:^[ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-: |]+\|[ \t]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)*)'
-    t = re.sub(table_pattern, format_table, t, flags=re.MULTILINE)
 
     # 3. Clean up common GitHub raw HTML tags embedded in text:
     # <h3>...</h3>, <h2>...</h2>, <h4>...</h4>
@@ -488,8 +489,12 @@ def text_to_rich_html(raw_text):
         summary_text = summary_m.group(1).strip() if summary_m else "Details"
         summary_text = re.sub(r'</?[^>]+>', '', summary_text).strip()
         inner = re.sub(r'<summary[^>]*>.*?</summary>', '', m.group(1), flags=re.IGNORECASE | re.DOTALL).strip()
+        inner = re.sub(table_pattern, format_table, inner, flags=re.MULTILINE)
         return f'<div style="margin: 12px 0; padding: 10px 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;"><div style="font-weight: 600; color: #93c5fd; margin-bottom: 6px;">📂 {summary_text}</div><div style="margin-top: 6px;">{inner}</div></div>'
     t = re.sub(r'<details[^>]*>(.*?)</details>', format_details, t, flags=re.IGNORECASE | re.DOTALL)
+
+    # Convert standalone tables
+    t = re.sub(table_pattern, format_table, t, flags=re.MULTILINE)
 
     # <sub>...</sub>
     t = re.sub(r'<sub[^>]*>(.*?)</sub>', r'<small style="color: #94a3b8; font-size: 11px;">\1</small>', t, flags=re.IGNORECASE | re.DOTALL)
