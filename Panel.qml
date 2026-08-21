@@ -146,9 +146,12 @@ Panel {
 
   function openDetail(env) {
     if (!env || !env.id) return
-    selectedId = env.id; selectedEnvelope = env; viewMode = "detail"
+    var wasUnseen = !Model.isSeen(env)
+    selectedId = env.id
+    selectedEnvelope = Object.assign({}, env)
+    viewMode = "detail"
     readMessage(env.id)
-    if (!Model.isSeen(env)) {
+    if (wasUnseen) {
       localSetSeen(env.id, true)
       markRead(env.id)
     }
@@ -195,20 +198,42 @@ Panel {
   function startAuth() { authInProgress = true; needsAuth = false; errorMsg = ""; authProc.running = true }
 
   function localSetSeen(id, seen) {
-    var updated = []
-    for (var i = 0; i < allEnvelopes.length; i++) {
-      var env = allEnvelopes[i]
-      if (env.id === id) {
-        var flags = env.flags || []
-        flags = flags.filter(function(f) { var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : ""); return n !== "seen" })
-        if (seen) { flags.push({raw: "\\Seen", iana: "seen"}) }
-        env.flags = flags
-        if (selectedEnvelope && selectedEnvelope.id === id) selectedEnvelope.flags = flags
+    function updateList(list) {
+      var updated = []
+      for (var i = 0; i < list.length; i++) {
+        var env = Object.assign({}, list[i])
+        if (env.id === id) {
+          var flags = env.flags ? [].concat(env.flags) : []
+          flags = flags.filter(function(f) {
+            var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : (f && f.raw ? String(f.raw).replace("\\", "").toLowerCase() : ""))
+            return n !== "seen"
+          })
+          if (seen) {
+            flags.push({raw: "\\Seen", iana: "seen"})
+          }
+          env.flags = flags
+        }
+        updated.push(env)
       }
-      updated.push(env)
+      return updated
     }
-    allEnvelopes = updated
-    envelopes = searchMode && !gmailSearch ? Model.fuzzyFilter(allEnvelopes, searchQuery) : allEnvelopes
+
+    allEnvelopes = updateList(allEnvelopes)
+    envelopes = searchMode && !gmailSearch ? Model.fuzzyFilter(allEnvelopes, searchQuery) : updateList(envelopes)
+
+    if (selectedEnvelope && selectedEnvelope.id === id) {
+      var sFlags = selectedEnvelope.flags ? [].concat(selectedEnvelope.flags) : []
+      sFlags = sFlags.filter(function(f) {
+        var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : (f && f.raw ? String(f.raw).replace("\\", "").toLowerCase() : ""))
+        return n !== "seen"
+      })
+      if (seen) {
+        sFlags.push({raw: "\\Seen", iana: "seen"})
+      }
+      var newSel = Object.assign({}, selectedEnvelope)
+      newSel.flags = sFlags
+      selectedEnvelope = newSel
+    }
   }
 
   function localToggleSeen(id) {
