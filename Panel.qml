@@ -103,19 +103,22 @@ Panel {
   }
 
   // ---- Data Actions
-  function fetchPage(page) {
+  function fetchPage(page, force) {
     currentPage = page
-    listProc.command = ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), String(pageSize), String(currentPage)]
-    if (!listProc.running) listProc.running = true
+    listProc.running = false
+    var cmd = ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), String(pageSize), String(currentPage)]
+    if (force) cmd.push("--force")
+    listProc.command = cmd
+    listProc.running = true
   }
 
   function refresh() {
     if (searchMode && !gmailSearch && searchQuery !== "") {
-      fetchPage(1)
+      fetchPage(1, true)
     } else if (gmailSearch) {
       runSearch(searchQuery, "")
     } else {
-      fetchPage(1)
+      fetchPage(currentPage, true)
     }
     if (viewMode === "detail" && selectedId !== "") readMessage(selectedId)
   }
