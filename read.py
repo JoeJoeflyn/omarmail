@@ -449,53 +449,96 @@ def sanitize_and_enrich_html(raw_html, panel_width=660):
     return builder.get_html()
 
 def text_to_rich_html(raw_text):
-    """Convert text/markdown email into clean, modern rich HTML with code blocks, quotes, headers, and links."""
+    """Convert text/markdown email into clean, modern rich HTML with tables, code blocks, headers, details cards, and links."""
     if not raw_text:
         return ""
 
     t = raw_text
 
-    # 1. Escape HTML special characters
-    t = html.escape(t, quote=True)
+    # 1. Strip raw HTML comments <!-- ... -->
+    t = re.sub(r'<!--.*?-->', '', t, flags=re.DOTALL)
 
-    # 2. Markdown links [text](url)
+    # 2. Markdown tables
+    def format_table(match):
+        lines = [l.strip() for l in match.group(0).strip().split('\n') if l.strip()]
+        if len(lines) < 2:
+            return match.group(0)
+        headers = [c.strip() for c in lines[0].strip('|').split('|')]
+        rows = []
+        for l in lines[2:]:
+            cols = [c.strip() for c in l.strip('|').split('|')]
+            rows.append(cols)
+        th_html = "".join([f'<th style="border: 1px solid rgba(255,255,255,0.12); padding: 8px 12px; background: rgba(255,255,255,0.06); color: #f8fafc; font-weight: 600; text-align: left;">{html.escape(h)}</th>' for h in headers])
+        tr_html = []
+        for r in rows:
+            td_html = "".join([f'<td style="border: 1px solid rgba(255,255,255,0.08); padding: 6px 12px; color: #cbd5e1;">{html.escape(c)}</td>' for c in r])
+            tr_html.append(f'<tr style="background: rgba(0,0,0,0.1);">{td_html}</tr>')
+        return f'<table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12);"><thead><tr>{th_html}</tr></thead><tbody>{"".join(tr_html)}</tbody></table>'
+
+    table_pattern = r'(?:^[ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-: |]+\|[ \t]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)*)'
+    t = re.sub(table_pattern, format_table, t, flags=re.MULTILINE)
+
+    # 3. Clean up common GitHub raw HTML tags embedded in text:
+    # <h3>...</h3>, <h2>...</h2>, <h4>...</h4>
+    t = re.sub(r'<h([1-6])[^>]*>(.*?)</h\1>', r'\n\n<h\1 style="margin: 14px 0 6px 0; color: #60a5fa; font-size: 15px; font-weight: 700;">\2</h\1>\n\n', t, flags=re.IGNORECASE | re.DOTALL)
+    
+    # <details><summary>...</summary>...</details>
+    def format_details(m):
+        summary_m = re.search(r'<summary[^>]*>(.*?)</summary>', m.group(0), flags=re.IGNORECASE | re.DOTALL)
+        summary_text = summary_m.group(1).strip() if summary_m else "Details"
+        summary_text = re.sub(r'</?[^>]+>', '', summary_text).strip()
+        inner = re.sub(r'<summary[^>]*>.*?</summary>', '', m.group(1), flags=re.IGNORECASE | re.DOTALL).strip()
+        return f'<div style="margin: 12px 0; padding: 10px 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;"><div style="font-weight: 600; color: #93c5fd; margin-bottom: 6px;">📂 {summary_text}</div><div style="margin-top: 6px;">{inner}</div></div>'
+    t = re.sub(r'<details[^>]*>(.*?)</details>', format_details, t, flags=re.IGNORECASE | re.DOTALL)
+
+    # <sub>...</sub>
+    t = re.sub(r'<sub[^>]*>(.*?)</sub>', r'<small style="color: #94a3b8; font-size: 11px;">\1</small>', t, flags=re.IGNORECASE | re.DOTALL)
+
+    # 4. GitHub Email Footer (--\nReply to this email...)
+    def format_footer(m):
+        footer_text = m.group(1).strip()
+        footer_html = html.escape(footer_text)
+        return f'<div style="margin-top: 20px; padding: 10px 14px; border-top: 1px dashed rgba(255,255,255,0.15); font-size: 11px; color: #64748b; line-height: 1.5;">{footer_html.replace(chr(10), "<br>")}</div>'
+    t = re.sub(r'\n--\s*\n(Reply to this email directly.*)$', format_footer, t, flags=re.DOTALL)
+
+    # 5. Markdown links [text](url)
     t = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', r'<a href="\2" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">\1</a>', t)
 
-    # 3. Raw URLs
+    # 6. Raw URLs
     t = re.sub(r'(?<!href=\")(?<!\">)(https?://[^\s<>\)]+)', r'<a href="\1" style="color: #60a5fa; text-decoration: underline;">\1</a>', t)
 
-    # 4. Code blocks ```...```
+    # 7. Code blocks ```...```
     def repl_cb(m):
         code = m.group(1).strip()
-        return f'<pre style="margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; font-family: monospace; font-size: 12px; color: #f8fafc;">{code}</pre>'
+        return f'<pre style="margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; font-family: monospace; font-size: 12px; color: #f8fafc; overflow-x: auto;">{html.escape(code)}</pre>'
     t = re.sub(r'```(?:[a-zA-Z0-9_\-]+)?\n?(.*?)```', repl_cb, t, flags=re.DOTALL)
 
-    # 5. Inline code `...`
+    # 8. Inline code `...`
     t = re.sub(r'`([^`\n]+)`', r'<tt style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-family: monospace; color: #38bdf8;">\1</tt>', t)
 
-    # 6. Bold & Italic
+    # 9. Bold & Italic
     t = re.sub(r'\*\*([^\*\n]+)\*\*', r'<b style="color: #ffffff;">\1</b>', t)
     t = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'<i>\1</i>', t)
 
-    # 7. Blockquotes > ...
+    # 10. Blockquotes > ...
     t = re.sub(r'(?m)^&gt;\s*(.*?)$', r'<blockquote style="border-left: 3px solid #3b82f6; margin: 8px 0; padding: 6px 12px; background: rgba(59,130,246,0.08); border-radius: 4px; color: #cbd5e1;">\1</blockquote>', t)
 
-    # 8. Headers # ...
+    # 11. Headers # ...
     t = re.sub(r'(?m)^###\s+(.*?)$', r'<h4 style="margin: 12px 0 4px 0; color: #ffffff;">\1</h4>', t)
     t = re.sub(r'(?m)^##\s+(.*?)$', r'<h3 style="margin: 14px 0 6px 0; color: #ffffff;">\1</h3>', t)
     t = re.sub(r'(?m)^#\s+(.*?)$', r'<h2 style="margin: 16px 0 8px 0; color: #ffffff;">\1</h2>', t)
 
-    # 9. Bullet points
-    t = re.sub(r'(?m)^[-*•]\s+(.*?)$', r'<div style="margin: 3px 0; padding-left: 14px;">• \1</div>', t)
+    # 12. Bullet points
+    t = re.sub(r'(?m)^[-*•]\s+(.*?)$', r'<div style="margin: 3px 0; padding-left: 14px; color: #e2e8f0;">• \1</div>', t)
 
-    # 10. Paragraphs
+    # 13. Paragraphs
     paras = t.split('\n\n')
     out = []
     for p in paras:
         ps = p.strip()
         if not ps:
             continue
-        if ps.startswith('<pre') or ps.startswith('<blockquote') or ps.startswith('<h') or ps.startswith('<div'):
+        if ps.startswith('<table') or ps.startswith('<div') or ps.startswith('<pre') or ps.startswith('<blockquote') or ps.startswith('<h') or ps.startswith('<small'):
             out.append(ps)
         else:
             out.append('<p style="margin: 8px 0; line-height: 1.55;">' + ps.replace('\n', '<br>') + '</p>')
