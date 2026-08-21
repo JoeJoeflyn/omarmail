@@ -470,19 +470,18 @@ def text_to_rich_html(raw_text):
         for l in lines[2:]:
             cols = [c.strip() for c in l.strip('|').split('|')]
             rows.append(cols)
-        th_html = "".join([f'<th align="left" bgcolor="#1e293b" style="padding: 8px 12px;"><font color="#f8fafc"><b>{html.escape(h)}</b></font></th>' for h in headers])
+        th_html = "".join([f'<th style="border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; background: rgba(255,255,255,0.08); color: #ffffff; font-weight: 600; text-align: left;">{html.escape(h)}</th>' for h in headers])
         tr_html = []
-        for idx, r in enumerate(rows):
-            bg = "#0f172a" if idx % 2 == 0 else "#141e33"
-            td_html = "".join([f'<td bgcolor="{bg}" style="padding: 7px 12px;"><font color="#cbd5e1">{html.escape(c)}</font></td>' for c in r])
-            tr_html.append(f'<tr>{td_html}</tr>')
-        return f'<table border="0" cellspacing="1" cellpadding="6" bgcolor="#334155" width="100%"><tr>{th_html}</tr>{"".join(tr_html)}</table>'
+        for r in rows:
+            td_html = "".join([f'<td style="border: 1px solid rgba(255,255,255,0.08); padding: 7px 12px; color: #cbd5e1;">{html.escape(c)}</td>' for c in r])
+            tr_html.append(f'<tr style="background: rgba(0,0,0,0.15);">{td_html}</tr>')
+        return f'<table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12);"><thead><tr>{th_html}</tr></thead><tbody>{"".join(tr_html)}</tbody></table>'
 
     table_pattern = r'(?:^[ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-: |]+\|[ \t]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)*)'
 
     # 3. Clean up common GitHub raw HTML tags embedded in text:
     # <h3>...</h3>, <h2>...</h2>, <h4>...</h4>
-    t = re.sub(r'<h([1-6])[^>]*>(.*?)</h\1>', r'<br><font color="#60a5fa" size="4"><b>\2</b></font><br>', t, flags=re.IGNORECASE | re.DOTALL)
+    t = re.sub(r'<h([1-6])[^>]*>(.*?)</h\1>', r'\n\n<h\1 style="margin: 14px 0 6px 0; color: #60a5fa; font-size: 15px; font-weight: 700;">\2</h\1>\n\n', t, flags=re.IGNORECASE | re.DOTALL)
     
     # <details><summary>...</summary>...</details>
     def format_details(m):
@@ -491,52 +490,51 @@ def text_to_rich_html(raw_text):
         summary_text = re.sub(r'</?[^>]+>', '', summary_text).strip()
         inner = re.sub(r'<summary[^>]*>.*?</summary>', '', m.group(1), flags=re.IGNORECASE | re.DOTALL).strip()
         inner = re.sub(table_pattern, format_table, inner, flags=re.MULTILINE)
-        return f'<table border="0" cellspacing="0" cellpadding="10" bgcolor="#172033" width="100%"><tr><td style="border-left: 3px solid #3b82f6;"><font color="#93c5fd" size="3"><b>📂 {summary_text}</b></font><br><br>{inner}</td></tr></table>'
+        return f'<div style="margin: 12px 0; padding: 10px 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;"><div style="font-weight: 600; color: #93c5fd; margin-bottom: 6px;">📂 {summary_text}</div><div style="margin-top: 6px;">{inner}</div></div>'
     t = re.sub(r'<details[^>]*>(.*?)</details>', format_details, t, flags=re.IGNORECASE | re.DOTALL)
 
     # Convert standalone tables
     t = re.sub(table_pattern, format_table, t, flags=re.MULTILINE)
 
     # <sub>...</sub>
-    t = re.sub(r'<sub[^>]*>(.*?)</sub>', r'<font color="#94a3b8" size="2">\1</font>', t, flags=re.IGNORECASE | re.DOTALL)
+    t = re.sub(r'<sub[^>]*>(.*?)</sub>', r'<small style="color: #94a3b8; font-size: 11px;">\1</small>', t, flags=re.IGNORECASE | re.DOTALL)
 
     # 4. GitHub Email Footer (--\nReply to this email...)
     def format_footer(m):
         footer_text = m.group(1).strip()
         footer_html = html.escape(footer_text)
-        footer_html = re.sub(r'(https?://[^\s<>\)]+)', r'<a href="\1"><font color="#60a5fa">\1</font></a>', footer_html)
-        return f'<br><hr color="#334155"><font color="#64748b" size="2">{footer_html.replace(chr(10), "<br>")}</font>'
+        return f'<div style="margin-top: 20px; padding: 10px 14px; border-top: 1px dashed rgba(255,255,255,0.15); font-size: 11px; color: #64748b; line-height: 1.5;">{footer_html.replace(chr(10), "<br>")}</div>'
     t = re.sub(r'\n--\s*\n(Reply to this email directly.*)$', format_footer, t, flags=re.DOTALL)
 
     # 5. Markdown links [text](url)
-    t = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', r'<a href="\2"><font color="#60a5fa"><u>\1</u></font></a>', t)
+    t = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', r'<a href="\2" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">\1</a>', t)
 
     # 6. Raw URLs
-    t = re.sub(r'(?<!href=\")(?<!\">)(https?://[^\s<>\)]+)', r'<a href="\1"><font color="#60a5fa"><u>\1</u></font></a>', t)
+    t = re.sub(r'(?<!href=\")(?<!\">)(https?://[^\s<>\)]+)', r'<a href="\1" style="color: #60a5fa; text-decoration: underline;">\1</a>', t)
 
     # 7. Code blocks ```...```
     def repl_cb(m):
         code = m.group(1).strip()
-        return f'<table border="0" cellspacing="0" cellpadding="8" bgcolor="#090d16" width="100%"><tr><td><font color="#38bdf8" face="monospace">{html.escape(code).replace(chr(10), "<br>")}</font></td></tr></table>'
+        return f'<pre style="margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; font-family: monospace; font-size: 12px; color: #f8fafc; overflow-x: auto;">{html.escape(code)}</pre>'
     t = re.sub(r'```(?:[a-zA-Z0-9_\-]+)?\n?(.*?)```', repl_cb, t, flags=re.DOTALL)
 
     # 8. Inline code `...`
-    t = re.sub(r'`([^`\n]+)`', r'<font color="#38bdf8" face="monospace"><tt>\1</tt></font>', t)
+    t = re.sub(r'`([^`\n]+)`', r'<tt style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-family: monospace; color: #38bdf8;">\1</tt>', t)
 
     # 9. Bold & Italic
-    t = re.sub(r'\*\*([^\*\n]+)\*\*', r'<font color="#ffffff"><b>\1</b></font>', t)
+    t = re.sub(r'\*\*([^\*\n]+)\*\*', r'<b style="color: #ffffff;">\1</b>', t)
     t = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'<i>\1</i>', t)
 
     # 10. Blockquotes > ...
-    t = re.sub(r'(?m)^&gt;\s*(.*?)$', r'<table border="0" cellspacing="0" cellpadding="6" bgcolor="#1e293b" width="100%"><tr><td style="border-left: 3px solid #3b82f6;"><font color="#cbd5e1">\1</font></td></tr></table>', t)
+    t = re.sub(r'(?m)^&gt;\s*(.*?)$', r'<blockquote style="border-left: 3px solid #3b82f6; margin: 8px 0; padding: 6px 12px; background: rgba(59,130,246,0.08); border-radius: 4px; color: #cbd5e1;">\1</blockquote>', t)
 
     # 11. Headers # ...
-    t = re.sub(r'(?m)^###\s+(.*?)$', r'<br><font color="#60a5fa" size="4"><b>\1</b></font><br>', t)
-    t = re.sub(r'(?m)^##\s+(.*?)$', r'<br><font color="#60a5fa" size="5"><b>\1</b></font><br>', t)
-    t = re.sub(r'(?m)^#\s+(.*?)$', r'<br><font color="#ffffff" size="6"><b>\1</b></font><br>', t)
+    t = re.sub(r'(?m)^###\s+(.*?)$', r'<h4 style="margin: 12px 0 4px 0; color: #ffffff;">\1</h4>', t)
+    t = re.sub(r'(?m)^##\s+(.*?)$', r'<h3 style="margin: 14px 0 6px 0; color: #ffffff;">\1</h3>', t)
+    t = re.sub(r'(?m)^#\s+(.*?)$', r'<h2 style="margin: 16px 0 8px 0; color: #ffffff;">\1</h2>', t)
 
     # 12. Bullet points
-    t = re.sub(r'(?m)^[-*•]\s+(.*?)$', r'&nbsp;&nbsp;• \1<br>', t)
+    t = re.sub(r'(?m)^[-*•]\s+(.*?)$', r'<div style="margin: 3px 0; padding-left: 14px; color: #e2e8f0;">• \1</div>', t)
 
     # 13. Paragraphs
     paras = t.split('\n\n')
@@ -545,13 +543,13 @@ def text_to_rich_html(raw_text):
         ps = p.strip()
         if not ps:
             continue
-        if ps.startswith('<table') or ps.startswith('<hr'):
+        if ps.startswith('<table') or ps.startswith('<div') or ps.startswith('<pre') or ps.startswith('<blockquote') or ps.startswith('<h') or ps.startswith('<small'):
             out.append(ps)
         else:
-            out.append('<p style="margin: 6px 0; line-height: 1.5;">' + ps.replace('\n', '<br>') + '</p>')
+            out.append('<p style="margin: 8px 0; line-height: 1.55;">' + ps.replace('\n', '<br>') + '</p>')
 
     res = '\n'.join(out)
-    return f'<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 13px; line-height: 1.5; color: #e2e8f0;">\n{res}\n</div>'
+    return f'<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 13px; line-height: 1.55; color: #e2e8f0; width: 100%; word-break: break-word;">\n{res}\n</div>'
 
 import tempfile
 
