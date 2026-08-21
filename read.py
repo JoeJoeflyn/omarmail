@@ -503,35 +503,6 @@ def text_to_rich_html(raw_text):
     res = '\n'.join(out)
     return f'<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 13px; line-height: 1.55; color: #e2e8f0; width: 100%; word-break: break-word;">\n{res}\n</div>'
 
-def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if not args:
-        print(json.dumps({"error": "No message ID provided"}))
-        sys.exit(1)
-
-    mid = args[0]
-    # Validate message ID — only allow alphanumeric, dash, underscore, dot
-    # Prevents path traversal via ../ in the cache filename
-    if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
-        print(json.dumps({"error": "Invalid message ID", "id": mid}))
-        sys.exit(1)
-    force = "--force" in sys.argv
-    # Use basename to strip any path components as defense-in-depth
-    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}.json"))
-
-    # Fast path: instant return from cache (TOCTOU-safe — open directly)
-    if not force:
-        try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                cached_data = f.read()
-                if cached_data.strip():
-                    print(cached_data)
-                    return
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
-
 import tempfile
 
 def run_himalaya_safe(cmd, timeout=15.0):
@@ -566,6 +537,35 @@ def run_himalaya_safe(cmd, timeout=15.0):
                 os.unlink(tmp_err_name)
             except Exception:
                 pass
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
+        print(json.dumps({"error": "No message ID provided"}))
+        sys.exit(1)
+
+    mid = args[0]
+    # Validate message ID — only allow alphanumeric, dash, underscore, dot
+    # Prevents path traversal via ../ in the cache filename
+    if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
+        print(json.dumps({"error": "Invalid message ID", "id": mid}))
+        sys.exit(1)
+    force = "--force" in sys.argv
+    # Use basename to strip any path components as defense-in-depth
+    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}.json"))
+
+    # Fast path: instant return from cache (TOCTOU-safe — open directly)
+    if not force:
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached_data = f.read()
+                if cached_data.strip():
+                    print(cached_data)
+                    return
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
 
     out, err, code = run_himalaya_safe(["himalaya", "message", "read", "--json", mid])
     if code != 0 or not out:
