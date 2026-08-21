@@ -51,8 +51,12 @@ Panel {
 
   property string pendingFlagId: ""
   property string pendingMoveId: ""
+  property int envelopesRevision: 0
 
-  readonly property int unreadCount: Model.unreadCount(allEnvelopes.length > 0 ? allEnvelopes : envelopes)
+  readonly property int unreadCount: {
+    var rev = envelopesRevision
+    return Model.unreadCount(allEnvelopes.length > 0 ? allEnvelopes : envelopes)
+  }
   property string label: "\uf0e0"
 
   // Exposed for components
@@ -197,6 +201,22 @@ Panel {
 
   function startAuth() { authInProgress = true; needsAuth = false; errorMsg = ""; authProc.running = true }
 
+  function isEnvelopeSeen(id) {
+    var rev = envelopesRevision
+    for (var i = 0; i < allEnvelopes.length; i++) {
+      if (allEnvelopes[i].id === id) return Model.isSeen(allEnvelopes[i])
+    }
+    return true
+  }
+
+  function getEnvelope(id) {
+    var rev = envelopesRevision
+    for (var i = 0; i < allEnvelopes.length; i++) {
+      if (allEnvelopes[i].id === id) return allEnvelopes[i]
+    }
+    return null
+  }
+
   function localSetSeen(id, seen) {
     function updateList(list) {
       var updated = []
@@ -234,6 +254,7 @@ Panel {
       newSel.flags = sFlags
       selectedEnvelope = newSel
     }
+    envelopesRevision++
   }
 
   function localToggleSeen(id) {
@@ -252,6 +273,7 @@ Panel {
       selectedEnvelope = null
       currentDetail = null
     }
+    envelopesRevision++
   }
 
   // ---- Processes
@@ -266,6 +288,7 @@ Panel {
           if (parsed && parsed.envelopes && parsed.envelopes.length > 0 && root.allEnvelopes.length === 0) {
             root.allEnvelopes = parsed.envelopes
             if (!root.searchMode) root.envelopes = parsed.envelopes
+            root.envelopesRevision++
             root.ready = true
           }
         } catch (e) {}
@@ -283,6 +306,7 @@ Panel {
         if (result.envelopes && result.envelopes.length > 0) {
           root.allEnvelopes = result.envelopes
           root.envelopes = (root.searchMode && !root.gmailSearch && root.searchQuery !== "") ? Model.fuzzyFilter(result.envelopes, root.searchQuery) : result.envelopes
+          root.envelopesRevision++
         }
         if (result.error && (result.error.indexOf("prompt") >= 0 || result.error.indexOf("TTY") >= 0 || result.error.indexOf("token") >= 0 || result.error.indexOf("auth") >= 0 || result.error.indexOf("credential") >= 0 || result.error.indexOf("401") >= 0 || result.error.indexOf("Unauthorized") >= 0)) {
           root.needsAuth = true; root.errorMsg = ""
@@ -427,8 +451,8 @@ Panel {
         else if (t === "Escape" || t === "Backspace") { if (root.viewMode === "detail") root.backToInbox(); else if (root.searchMode) root.clearSearch(); else root.close() }
         else if (t === "/" || t === "s") { if (root.viewMode === "inbox") { root.searchOpen = true; mainContentCol.searchField.forceActiveFocus() } }
         else if (t === "u" || t === "U") {
-          if (root.viewMode === "detail" && root.selectedEnvelope) root.toggleSeen(root.selectedEnvelope.id, Model.isSeen(root.selectedEnvelope))
-          else if (root.viewMode === "inbox" && root.envelopes[root.cursorIndex]) root.toggleSeen(root.envelopes[root.cursorIndex].id, Model.isSeen(root.envelopes[root.cursorIndex]))
+          if (root.viewMode === "detail" && root.selectedEnvelope) root.toggleSeen(root.selectedEnvelope.id, root.isEnvelopeSeen(root.selectedEnvelope.id))
+          else if (root.viewMode === "inbox" && root.envelopes[root.cursorIndex]) root.toggleSeen(root.envelopes[root.cursorIndex].id, root.isEnvelopeSeen(root.envelopes[root.cursorIndex].id))
         }
         else if (t === "d" || t === "D") {
           if (root.viewMode === "detail" && root.selectedEnvelope) root.deleteMessage(root.selectedEnvelope.id)

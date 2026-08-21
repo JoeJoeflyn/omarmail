@@ -43,12 +43,12 @@ Item {
       spacing: Style.space(6)
 
       PanelActionButton {
-        iconText: (p.selectedEnvelope && Model.isSeen(p.selectedEnvelope)) ? "\uf0e0" : "\uf2b7"
-        tooltipText: (p.selectedEnvelope && Model.isSeen(p.selectedEnvelope)) ? "Mark as unread (u)" : "Mark as read (u)"
+        iconText: (p.selectedEnvelope && p.isEnvelopeSeen(p.selectedEnvelope.id)) ? "\uf0e0" : "\uf2b7"
+        tooltipText: (p.selectedEnvelope && p.isEnvelopeSeen(p.selectedEnvelope.id)) ? "Mark as unread (u)" : "Mark as read (u)"
         foreground: p.foreground
         hoverColor: Color.accent
         fontFamily: p.fontFamily
-        onClicked: { if (p.selectedEnvelope) p.toggleSeen(p.selectedEnvelope.id, Model.isSeen(p.selectedEnvelope)) }
+        onClicked: { if (p.selectedEnvelope) p.toggleSeen(p.selectedEnvelope.id, p.isEnvelopeSeen(p.selectedEnvelope.id)) }
       }
 
       PanelActionButton {

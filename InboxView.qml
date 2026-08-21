@@ -166,8 +166,14 @@ Flickable {
         id: emailRow
         required property var modelData
         required property int index
-        readonly property var env: modelData
-        readonly property bool isSeen: Model.isSeen(env)
+        readonly property var env: {
+          var rev = p.envelopesRevision
+          return p.getEnvelope(modelData.id) || modelData
+        }
+        readonly property bool isSeen: {
+          var rev = p.envelopesRevision
+          return p.isEnvelopeSeen(emailRow.env.id)
+        }
         readonly property bool isHovered: rowHover.hovered
 
         hasCursor: p.cursorActive && p.cursorIndex === index
