@@ -79,6 +79,8 @@ def run_himalaya_safe(cmd, timeout=12.0):
             except Exception:
                 pass
 
+import re
+
 def main():
     if len(sys.argv) < 3:
         print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete> <id>"}))
@@ -87,15 +89,20 @@ def main():
     action = sys.argv[1]
     mid = sys.argv[2]
 
+    # Validate message ID
+    if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
+        print(json.dumps({"success": False, "error": "Invalid message ID", "id": mid}))
+        sys.exit(1)
+
     if action == "mark_read":
         update_cache_flag(mid, seen=True)
-        cmd = ["himalaya", "flag", "add", "-f", "seen", mid]
+        cmd = ["himalaya", "flag", "add", "-f", "seen", "--", mid]
     elif action == "mark_unread":
         update_cache_flag(mid, seen=False)
-        cmd = ["himalaya", "flag", "remove", "-f", "seen", mid]
+        cmd = ["himalaya", "flag", "remove", "-f", "seen", "--", mid]
     elif action == "delete":
         remove_from_cache(mid)
-        cmd = ["himalaya", "message", "move", "--to", "Trash", mid]
+        cmd = ["himalaya", "message", "move", "--to", "Trash", "--", mid]
     else:
         print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
         sys.exit(1)

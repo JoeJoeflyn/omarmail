@@ -143,7 +143,7 @@ def main():
     # 2. Fetch each message's headers
     envelopes = []
     for mid in ids:
-        stdout, _, code = run(["himalaya", "message", "read", "--json", mid])
+        stdout, _, code = run(["himalaya", "message", "read", "--json", "--", mid])
         if code != 0:
             continue
         env = parse_message_to_envelope(stdout, mid)

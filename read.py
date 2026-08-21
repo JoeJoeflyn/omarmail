@@ -567,7 +567,7 @@ def main():
         except Exception:
             pass
 
-    out, err, code = run_himalaya_safe(["himalaya", "message", "read", "--json", mid])
+    out, err, code = run_himalaya_safe(["himalaya", "message", "read", "--json", "--", mid])
     if code != 0 or not out:
         print(json.dumps({"error": err or "Failed to read message", "id": mid}))
         sys.exit(0)
