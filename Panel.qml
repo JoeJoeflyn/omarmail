@@ -205,10 +205,11 @@ Panel {
 
   function deleteMessage(id) {
     pendingMoveId = id; moveProc.running = false
+    var wasInDetail = viewMode === "detail" && selectedId === id
     localRemove(id)
     moveProc.command = ["python3", Qt.resolvedUrl("action.py").toString().replace("file://", ""), "delete", id]
     moveProc.running = true
-    if (viewMode === "detail" && selectedId === id) backToInbox()
+    if (wasInDetail) backToInbox()
   }
 
   function openInGmail(id) { Qt.openUrlExternally("https://mail.google.com/mail/u/0/#inbox/" + id) }
