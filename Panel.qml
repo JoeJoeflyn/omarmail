@@ -53,6 +53,7 @@ Panel {
   property string pendingMoveId: ""
   property int envelopesRevision: 0
   property var seenOverrides: ({})
+  property var deletedIds: ({})
 
   readonly property int unreadCount: {
     var rev = envelopesRevision
@@ -60,7 +61,7 @@ Panel {
     var count = 0
     for (var i = 0; i < list.length; i++) {
       var item = list[i]
-      if (item && item.id) {
+      if (item && item.id && !root.deletedIds[item.id]) {
         var isS = (item.id in seenOverrides) ? seenOverrides[item.id] : Model.isSeen(item)
         if (!isS) count++
       }
@@ -215,7 +216,8 @@ Panel {
   function startAuth() { authInProgress = true; needsAuth = false; errorMsg = ""; authProc.running = true }
 
   function isEnvelopeSeen(id) {
-    if (id && id in seenOverrides) return seenOverrides[id]
+    if (!id || root.deletedIds[id]) return true
+    if (id in seenOverrides) return seenOverrides[id]
     var rev = envelopesRevision
     for (var i = 0; i < allEnvelopes.length; i++) {
       if (allEnvelopes[i].id === id) return Model.isSeen(allEnvelopes[i])
@@ -224,6 +226,7 @@ Panel {
   }
 
   function getEnvelope(id) {
+    if (!id || root.deletedIds[id]) return null
     var rev = envelopesRevision
     for (var i = 0; i < allEnvelopes.length; i++) {
       if (allEnvelopes[i].id === id) return allEnvelopes[i]
@@ -284,6 +287,10 @@ Panel {
   }
 
   function localRemove(id) {
+    var dids = Object.assign({}, deletedIds)
+    dids[id] = true
+    deletedIds = dids
+
     allEnvelopes = allEnvelopes.filter(function(env) { return env.id !== id })
     envelopes = envelopes.filter(function(env) { return env.id !== id })
     if (selectedId === id) {
@@ -304,9 +311,11 @@ Panel {
         try {
           var parsed = JSON.parse(String(text || "").trim())
           if (parsed && parsed.envelopes && parsed.envelopes.length > 0 && root.allEnvelopes.length === 0) {
+            var validEnvs = []
             for (var i = 0; i < parsed.envelopes.length; i++) {
               var env = parsed.envelopes[i]
-              if (env && env.id && (env.id in root.seenOverrides)) {
+              if (!env || !env.id || root.deletedIds[env.id]) continue
+              if (env.id in root.seenOverrides) {
                 var seen = root.seenOverrides[env.id]
                 var flags = env.flags ? [].concat(env.flags) : []
                 flags = flags.filter(function(f) {
@@ -316,9 +325,10 @@ Panel {
                 if (seen) flags.push({raw: "\\Seen", iana: "seen"})
                 env.flags = flags
               }
+              validEnvs.push(env)
             }
-            root.allEnvelopes = parsed.envelopes
-            if (!root.searchMode) root.envelopes = parsed.envelopes
+            root.allEnvelopes = validEnvs
+            if (!root.searchMode) root.envelopes = validEnvs
             root.envelopesRevision++
             root.ready = true
           }
@@ -335,9 +345,11 @@ Panel {
       onStreamFinished: {
         var result = Model.parseEnvelopeList(String(text || "").trim())
         if (result.envelopes && result.envelopes.length > 0) {
+          var validEnvs = []
           for (var i = 0; i < result.envelopes.length; i++) {
             var env = result.envelopes[i]
-            if (env && env.id && (env.id in root.seenOverrides)) {
+            if (!env || !env.id || root.deletedIds[env.id]) continue
+            if (env.id in root.seenOverrides) {
               var seen = root.seenOverrides[env.id]
               var flags = env.flags ? [].concat(env.flags) : []
               flags = flags.filter(function(f) {
@@ -347,9 +359,10 @@ Panel {
               if (seen) flags.push({raw: "\\Seen", iana: "seen"})
               env.flags = flags
             }
+            validEnvs.push(env)
           }
-          root.allEnvelopes = result.envelopes
-          root.envelopes = (root.searchMode && !root.gmailSearch && root.searchQuery !== "") ? Model.fuzzyFilter(result.envelopes, root.searchQuery) : result.envelopes
+          root.allEnvelopes = validEnvs
+          root.envelopes = (root.searchMode && !root.gmailSearch && root.searchQuery !== "") ? Model.fuzzyFilter(validEnvs, root.searchQuery) : validEnvs
           root.envelopesRevision++
         }
         if (result.error && (result.error.indexOf("prompt") >= 0 || result.error.indexOf("TTY") >= 0 || result.error.indexOf("token") >= 0 || result.error.indexOf("auth") >= 0 || result.error.indexOf("credential") >= 0 || result.error.indexOf("401") >= 0 || result.error.indexOf("Unauthorized") >= 0)) {
@@ -375,7 +388,13 @@ Panel {
         try {
           var parsed = JSON.parse(String(text || "").trim())
           if (parsed.error) { root.errorMsg = parsed.error; root.envelopes = [] }
-          else { root.envelopes = parsed.envelopes || []; root.searchNextPage = parsed.next_page || ""; root.hasMorePages = root.searchNextPage !== ""; root.errorMsg = "" }
+          else {
+            var rawSearchEnvs = parsed.envelopes || []
+            root.envelopes = rawSearchEnvs.filter(function(env) { return env && env.id && !root.deletedIds[env.id] })
+            root.searchNextPage = parsed.next_page || ""
+            root.hasMorePages = root.searchNextPage !== ""
+            root.errorMsg = ""
+          }
           root.ready = true
         } catch (e) { root.errorMsg = "Search failed: " + String(e); root.envelopes = [] }
       }

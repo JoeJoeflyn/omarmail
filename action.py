@@ -162,10 +162,11 @@ def main():
         remove_from_cache(mid)
         candidates = [
             ["himalaya", "message", "move", "--to", "TRASH", "--", mid],
+            ["himalaya", "message", "move", "-f", "INBOX", "--to", "TRASH", "--", mid],
             ["himalaya", "message", "move", "--to", "Trash", "--", mid],
-            ["himalaya", "message", "move", "--to", "trash", "--", mid],
+            ["himalaya", "message", "move", "-f", "INBOX", "--to", "Trash", "--", mid],
             ["himalaya", "message", "move", "--to", "[Gmail]/Trash", "--", mid],
-            ["himalaya", "flag", "add", "-f", "deleted", "--", mid],
+            ["himalaya", "message", "move", "--to", "trash", "--", mid],
         ]
         success = False
         last_err = ""
