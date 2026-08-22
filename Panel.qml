@@ -52,10 +52,20 @@ Panel {
   property string pendingFlagId: ""
   property string pendingMoveId: ""
   property int envelopesRevision: 0
+  property var seenOverrides: ({})
 
   readonly property int unreadCount: {
     var rev = envelopesRevision
-    return Model.unreadCount(allEnvelopes.length > 0 ? allEnvelopes : envelopes)
+    var list = allEnvelopes.length > 0 ? allEnvelopes : envelopes
+    var count = 0
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i]
+      if (item && item.id) {
+        var isS = (item.id in seenOverrides) ? seenOverrides[item.id] : Model.isSeen(item)
+        if (!isS) count++
+      }
+    }
+    return count
   }
   property string label: "\uf0e0"
 
@@ -205,6 +215,7 @@ Panel {
   function startAuth() { authInProgress = true; needsAuth = false; errorMsg = ""; authProc.running = true }
 
   function isEnvelopeSeen(id) {
+    if (id && id in seenOverrides) return seenOverrides[id]
     var rev = envelopesRevision
     for (var i = 0; i < allEnvelopes.length; i++) {
       if (allEnvelopes[i].id === id) return Model.isSeen(allEnvelopes[i])
@@ -221,6 +232,10 @@ Panel {
   }
 
   function localSetSeen(id, seen) {
+    var so = Object.assign({}, seenOverrides)
+    so[id] = seen
+    seenOverrides = so
+
     function updateList(list) {
       var updated = []
       for (var i = 0; i < list.length; i++) {
@@ -289,6 +304,19 @@ Panel {
         try {
           var parsed = JSON.parse(String(text || "").trim())
           if (parsed && parsed.envelopes && parsed.envelopes.length > 0 && root.allEnvelopes.length === 0) {
+            for (var i = 0; i < parsed.envelopes.length; i++) {
+              var env = parsed.envelopes[i]
+              if (env && env.id && (env.id in root.seenOverrides)) {
+                var seen = root.seenOverrides[env.id]
+                var flags = env.flags ? [].concat(env.flags) : []
+                flags = flags.filter(function(f) {
+                  var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : (f && f.raw ? String(f.raw).replace("\\", "").toLowerCase() : ""))
+                  return n !== "seen"
+                })
+                if (seen) flags.push({raw: "\\Seen", iana: "seen"})
+                env.flags = flags
+              }
+            }
             root.allEnvelopes = parsed.envelopes
             if (!root.searchMode) root.envelopes = parsed.envelopes
             root.envelopesRevision++
@@ -307,6 +335,19 @@ Panel {
       onStreamFinished: {
         var result = Model.parseEnvelopeList(String(text || "").trim())
         if (result.envelopes && result.envelopes.length > 0) {
+          for (var i = 0; i < result.envelopes.length; i++) {
+            var env = result.envelopes[i]
+            if (env && env.id && (env.id in root.seenOverrides)) {
+              var seen = root.seenOverrides[env.id]
+              var flags = env.flags ? [].concat(env.flags) : []
+              flags = flags.filter(function(f) {
+                var n = typeof f === "string" ? f.toLowerCase() : (f && f.iana ? String(f.iana).toLowerCase() : (f && f.raw ? String(f.raw).replace("\\", "").toLowerCase() : ""))
+                return n !== "seen"
+              })
+              if (seen) flags.push({raw: "\\Seen", iana: "seen"})
+              env.flags = flags
+            }
+          }
           root.allEnvelopes = result.envelopes
           root.envelopes = (root.searchMode && !root.gmailSearch && root.searchQuery !== "") ? Model.fuzzyFilter(result.envelopes, root.searchQuery) : result.envelopes
           root.envelopesRevision++

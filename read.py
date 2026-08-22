@@ -27,8 +27,57 @@ from concurrent.futures import ThreadPoolExecutor
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail/images")
 MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
+BASE_CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
+PAGES_DIR = os.path.join(BASE_CACHE_DIR, "pages")
+INBOX_CACHE = os.path.join(BASE_CACHE_DIR, "inbox_cache.json")
 os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
 os.makedirs(MSG_CACHE_DIR, mode=0o700, exist_ok=True)
+
+def update_envelope_cache_seen(mid):
+    if os.path.exists(INBOX_CACHE):
+        try:
+            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            envelopes = data if isinstance(data, list) else data.get("envelopes", [])
+            for env in envelopes:
+                if env.get("id") == mid:
+                    flags = env.get("flags", [])
+                    flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
+                    flags.append({"raw": "\\Seen", "iana": "seen"})
+                    env["flags"] = flags
+            tmp = INBOX_CACHE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(envelopes, f, ensure_ascii=False)
+            os.replace(tmp, INBOX_CACHE)
+        except Exception:
+            pass
+
+    if os.path.exists(PAGES_DIR):
+        try:
+            for fname in os.listdir(PAGES_DIR):
+                if fname.startswith("p_") and fname.endswith(".json"):
+                    fpath = os.path.join(PAGES_DIR, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            page_data = json.load(f)
+                        page_envs = page_data if isinstance(page_data, list) else page_data.get("envelopes", [])
+                        modified = False
+                        for env in page_envs:
+                            if env.get("id") == mid:
+                                flags = env.get("flags", [])
+                                flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
+                                flags.append({"raw": "\\Seen", "iana": "seen"})
+                                env["flags"] = flags
+                                modified = True
+                        if modified:
+                            tmp_p = fpath + ".tmp"
+                            with open(tmp_p, "w", encoding="utf-8") as f:
+                                json.dump(page_envs, f, ensure_ascii=False)
+                            os.replace(tmp_p, fpath)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB max per image
 
@@ -603,6 +652,7 @@ def main():
     cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}.json"))
 
     # Fast path: instant return from cache (TOCTOU-safe — open directly)
+    update_envelope_cache_seen(mid)
     if not force:
         try:
             with open(cache_file, "r", encoding="utf-8") as f:

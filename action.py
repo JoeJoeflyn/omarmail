@@ -7,27 +7,57 @@ import subprocess
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
 INBOX_CACHE = os.path.join(CACHE_DIR, "inbox_cache.json")
+PAGES_DIR = os.path.join(CACHE_DIR, "pages")
 
 def update_cache_flag(mid, seen=True):
-    if not os.path.exists(INBOX_CACHE):
-        return
-    try:
-        with open(INBOX_CACHE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        envelopes = data if isinstance(data, list) else data.get("envelopes", [])
-        for env in envelopes:
-            if env.get("id") == mid:
-                flags = env.get("flags", [])
-                flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
-                if seen:
-                    flags.append({"raw": "\\Seen", "iana": "seen"})
-                env["flags"] = flags
-        tmp = INBOX_CACHE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(envelopes, f, ensure_ascii=False)
-        os.replace(tmp, INBOX_CACHE)
-    except Exception:
-        pass
+    # 1. Update legacy inbox_cache.json
+    if os.path.exists(INBOX_CACHE):
+        try:
+            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            envelopes = data if isinstance(data, list) else data.get("envelopes", [])
+            for env in envelopes:
+                if env.get("id") == mid:
+                    flags = env.get("flags", [])
+                    flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
+                    if seen:
+                        flags.append({"raw": "\\Seen", "iana": "seen"})
+                    env["flags"] = flags
+            tmp = INBOX_CACHE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(envelopes, f, ensure_ascii=False)
+            os.replace(tmp, INBOX_CACHE)
+        except Exception:
+            pass
+
+    # 2. Update multi-page cache files in pages/
+    if os.path.exists(PAGES_DIR):
+        try:
+            for fname in os.listdir(PAGES_DIR):
+                if fname.startswith("p_") and fname.endswith(".json"):
+                    fpath = os.path.join(PAGES_DIR, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            page_data = json.load(f)
+                        page_envs = page_data if isinstance(page_data, list) else page_data.get("envelopes", [])
+                        modified = False
+                        for env in page_envs:
+                            if env.get("id") == mid:
+                                flags = env.get("flags", [])
+                                flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
+                                if seen:
+                                    flags.append({"raw": "\\Seen", "iana": "seen"})
+                                env["flags"] = flags
+                                modified = True
+                        if modified:
+                            tmp_p = fpath + ".tmp"
+                            with open(tmp_p, "w", encoding="utf-8") as f:
+                                json.dump(page_envs, f, ensure_ascii=False)
+                            os.replace(tmp_p, fpath)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
 
@@ -44,6 +74,27 @@ def remove_from_cache(mid):
             os.replace(tmp, INBOX_CACHE)
         except Exception:
             pass
+
+    if os.path.exists(PAGES_DIR):
+        try:
+            for fname in os.listdir(PAGES_DIR):
+                if fname.startswith("p_") and fname.endswith(".json"):
+                    fpath = os.path.join(PAGES_DIR, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            page_data = json.load(f)
+                        page_envs = page_data if isinstance(page_data, list) else page_data.get("envelopes", [])
+                        new_page_envs = [e for e in page_envs if e.get("id") != mid]
+                        if len(new_page_envs) != len(page_envs):
+                            tmp_p = fpath + ".tmp"
+                            with open(tmp_p, "w", encoding="utf-8") as f:
+                                json.dump(new_page_envs, f, ensure_ascii=False)
+                            os.replace(tmp_p, fpath)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     msg_file = os.path.join(MSG_CACHE_DIR, f"{mid}.json")
     if os.path.exists(msg_file):
         try:
