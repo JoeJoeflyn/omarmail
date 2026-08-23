@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Backend: Himalaya](https://img.shields.io/badge/Backend-Himalaya-red)](https://github.com/pimalaya/himalaya)
 
-![''](preview.png)
+![Omarmail Preview](preview.png)
 
 ---
 
