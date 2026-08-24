@@ -22,6 +22,15 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property color surface: Color.popups.background
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  // Panel size from shell.json entry settings (panelWidth/panelHeight), clamped to safe ranges
+  readonly property int panelWidthSetting: {
+    var v = settings && settings.panelWidth !== undefined ? Number(settings.panelWidth) : 720
+    return Style.space(Math.max(320, Math.min(1200, v)))
+  }
+  readonly property int panelHeightSetting: {
+    var v = settings && settings.panelHeight !== undefined ? Number(settings.panelHeight) : 620
+    return Style.space(Math.max(300, Math.min(900, v)))
+  }
 
   // ---- State
   property string viewMode: "inbox"
@@ -487,10 +496,10 @@ Panel {
     bar: root.bar
     open: root.opened
     centerOnBar: false
-    contentWidth: panel.fittedContentWidth(Style.space(720))
+    contentWidth: panel.fittedContentWidth(root.panelWidthSetting)
     contentHeight: root.viewMode === "detail"
       ? panel.fittedContentHeight(Style.space(680), Style.space(800))
-      : panel.fittedContentHeight(Math.max(Style.space(360), Math.min(mainContentCol.contentHeight + Style.space(16), Style.space(620))), Style.space(620))
+      : panel.fittedContentHeight(Math.max(Style.space(360), Math.min(mainContentCol.contentHeight + Style.space(16), root.panelHeightSetting)), root.panelHeightSetting)
 
     PanelKeyCatcher {
       id: keyCatcher

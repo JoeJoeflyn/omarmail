@@ -10,6 +10,8 @@ import json
 import time
 import subprocess
 import tempfile
+import imaplib
+import tomllib
 
 CACHE_BASE = os.path.expanduser("~/.cache/omarmail")
 CACHE_DIR = os.path.join(CACHE_BASE, "pages")
@@ -21,6 +23,99 @@ except Exception:
     pass
 
 INBOX_CACHE = os.path.join(CACHE_BASE, "inbox_cache.json")
+
+# --- Inbox exclusion filtering ----------------------------------------------
+# Hide messages matching Gmail search terms (e.g. "category:promotions") from
+# every list output. Terms live in ~/.config/omarmail/excluded.json as a JSON
+# array; matched message UIDs are resolved via IMAP X-GM-RAW and cached.
+EXCLUDED_CONFIG = os.path.expanduser("~/.config/omarmail/excluded.json")
+EXCLUDED_UID_CACHE = os.path.join(CACHE_BASE, "excluded_uids.json")
+EXCLUDED_TTL = 300  # seconds
+HIMALAYA_CONFIG = os.path.expanduser("~/.config/himalaya/config.toml")
+
+def load_excluded_terms():
+    """Read Gmail search terms whose matches are hidden from the inbox."""
+    try:
+        with open(EXCLUDED_CONFIG, "r", encoding="utf-8") as f:
+            terms = json.load(f)
+        if isinstance(terms, str):
+            terms = [terms]
+        # Strip quotes/whitespace; terms with quotes would break X-GM-RAW syntax
+        return [t.strip() for t in terms if isinstance(t, str) and t.strip() and '"' not in t]
+    except Exception:
+        return []
+
+def load_imap_credentials():
+    """Parse IMAP server/login/password from himalaya's config (single source of truth)."""
+    try:
+        with open(HIMALAYA_CONFIG, "rb") as f:
+            cfg = tomllib.load(f)
+        account = cfg["accounts"]["personal"]
+        server = account["imap"]["server"]
+        user = account["imap"]["sasl"]["plain"]["username"]
+        pw = account["imap"]["sasl"]["plain"]["password"]["raw"]
+        return server, user, pw
+    except Exception:
+        return None
+
+def fetch_excluded_uids(terms):
+    """Resolve the UID set hidden by the given search terms, cached for EXCLUDED_TTL."""
+    if os.path.exists(EXCLUDED_UID_CACHE):
+        try:
+            fresh = time.time() - os.path.getmtime(EXCLUDED_UID_CACHE) < EXCLUDED_TTL
+            config_newer = (os.path.exists(EXCLUDED_CONFIG) and
+                            os.path.getmtime(EXCLUDED_CONFIG) > os.path.getmtime(EXCLUDED_UID_CACHE))
+            if fresh and not config_newer:
+                with open(EXCLUDED_UID_CACHE, "r", encoding="utf-8") as f:
+                    return set(json.load(f))
+        except Exception:
+            pass
+    creds = load_imap_credentials()
+    if not creds:
+        return set()
+    server, user, pw = creds
+    host, _, port = server.partition(":")
+    try:
+        port = int(port) if port else 993
+    except ValueError:
+        port = 993
+    uids = set()
+    try:
+        conn = imaplib.IMAP4_SSL(host, port, timeout=8)
+        try:
+            conn.login(user, pw)
+            conn.select("INBOX")
+            for term in terms:
+                typ, data = conn.uid("SEARCH", f'X-GM-RAW "{term}"')
+                if typ == "OK" and data and data[0]:
+                    uids.update(data[0].decode().split())
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+    except Exception:
+        # Any IMAP failure degrades to no filtering; inbox listing must keep working
+        return set()
+    if uids:
+        try:
+            tmp = EXCLUDED_UID_CACHE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(sorted(uids), f)
+            os.replace(tmp, EXCLUDED_UID_CACHE)
+        except Exception:
+            pass
+    return uids
+
+def apply_exclusion(envelopes):
+    """Filter out envelopes whose UID matches an excluded search term."""
+    terms = load_excluded_terms()
+    if not terms:
+        return envelopes
+    excluded = fetch_excluded_uids(terms)
+    if not excluded:
+        return envelopes
+    return [e for e in envelopes if e.get("id") not in excluded]
 
 def get_page_cache_path(page_size, page):
     return os.path.join(CACHE_DIR, f"p_{page_size}_{page}.json")
@@ -175,7 +270,7 @@ def main():
     if cache_only:
         cached = get_cached_page(page_size, page)
         if cached is not None:
-            print(json.dumps({"envelopes": cached, "cached": True, "error": ""}))
+            print(json.dumps({"envelopes": apply_exclusion(cached), "cached": True, "error": ""}))
         else:
             print(json.dumps({"envelopes": [], "cached": False, "error": ""}))
         return
@@ -184,7 +279,7 @@ def main():
     cached = get_cached_page(page_size, page)
     if cached is not None and not force:
         # Return instantly!
-        print(json.dumps({"envelopes": cached, "cached": True, "error": ""}))
+        print(json.dumps({"envelopes": apply_exclusion(cached), "cached": True, "error": ""}))
         # Prefetch adjacent pages in background
         trigger_prefetch(page_size, page + 1)
         if page > 1:
@@ -197,6 +292,7 @@ def main():
         result["envelopes"] = cached
         result["from_cache"] = True
 
+    result["envelopes"] = apply_exclusion(result.get("envelopes", []))
     print(json.dumps(result))
 
     # Prefetch next page in background
