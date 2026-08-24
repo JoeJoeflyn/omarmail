@@ -137,6 +137,38 @@ omarchy-shell omarmail openMessage <id> # Open specific email detail
 
 ---
 
+## ⚙️ Settings
+
+### Panel Size
+
+Resize the popup panel by adding `panelWidth` and `panelHeight` to the `omarmail` entry in `~/.config/omarchy/shell.json`:
+
+```json
+{
+  "id": "omarmail",
+  "panelWidth": 900,
+  "panelHeight": 700
+}
+```
+
+- `panelWidth`: 320–1200, default 720
+- `panelHeight`: 300–900, default 620 (inbox only; the detail view stays content-driven)
+- Out-of-range values are clamped. Changes apply when the widget loads — restart the shell with `omarchy-restart-shell` after editing.
+
+### Category Filtering
+
+Hide Gmail categories (promotions, social, …) by creating `~/.config/omarmail/excluded.json` as a JSON array of Gmail search terms:
+
+```json
+["category:promotions", "category:social"]
+```
+
+- Messages matching any term are hidden from the inbox, unread badge, and search.
+- Takes effect on the next refresh (`omarchy-shell omarmail refresh` or the 60-second auto-refresh) — no restart or cache clearing needed.
+- Gmail system categories only match `category:` terms (`category:promotions`, `category:social`, …); `label:` and `X-GM-LABELS` return nothing for them. Custom labels use `label:<name>`.
+
+---
+
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
@@ -150,6 +182,7 @@ Uninstall the plugin and clean up cached data:
 ```bash
 omarchy plugin remove omarmail
 rm -rf ~/.cache/omarmail
+rm -rf ~/.config/omarmail
 ```
 
 Then remove `"omarmail"` from your status bar section in `~/.config/omarchy/shell.json`.
