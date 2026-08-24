@@ -4,6 +4,9 @@ import sys
 import os
 import json
 import subprocess
+import imaplib
+import tomllib
+import re
 
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
 INBOX_CACHE = os.path.join(CACHE_DIR, "inbox_cache.json")
@@ -139,6 +142,83 @@ def run_himalaya_safe(cmd, timeout=12.0):
 
 import re
 
+def load_imap_credentials():
+    """Parse IMAP server/login/password from himalaya's config (single source of truth)."""
+    try:
+        with open(os.path.expanduser("~/.config/himalaya/config.toml"), "rb") as f:
+            cfg = tomllib.load(f)
+        account = cfg["accounts"]["personal"]
+        server = account["imap"]["server"]
+        user = account["imap"]["sasl"]["plain"]["username"]
+        pw = account["imap"]["sasl"]["plain"]["password"]["raw"]
+        return server, user, pw
+    except Exception:
+        return None
+
+def find_trash_mailbox(conn):
+    """Return the trash mailbox wire name via its \\Trash special-use attribute.
+
+    Locale-independent: Gmail zh-TW reports "[Gmail]/&V4NXPmh2-" (垃圾桶), an
+    English account "[Gmail]/Trash". Falls back to None when absent.
+    """
+    try:
+        typ, lines = conn.list()
+        if typ != "OK":
+            return None
+        for line in lines:
+            s = line.decode("utf-8", "replace")
+            if "\\Trash" in s:
+                m = re.search(r'"([^"]*)"\s*$', s)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
+def delete_message(mid):
+    """Move one message to the account's trash mailbox via imaplib.
+
+    himalaya's `message move` misreports Gmail moves: the message lands in the
+    trash but the command exits 1 with "NO System Error", so the plugin showed
+    an error despite the delete working. Driving IMAP directly with UID MOVE
+    reports the server's real response.
+    """
+    creds = load_imap_credentials()
+    if not creds:
+        return False, "Cannot read IMAP credentials from ~/.config/himalaya/config.toml"
+    server, user, pw = creds
+    host, _, port = server.partition(":")
+    try:
+        port = int(port) if port else 993
+    except ValueError:
+        port = 993
+    try:
+        conn = imaplib.IMAP4_SSL(host, port, timeout=10)
+        try:
+            conn.login(user, pw)
+            typ, _ = conn.select("INBOX")
+            if typ != "OK":
+                return False, f"Failed to select INBOX: {typ}"
+            trash = find_trash_mailbox(conn)
+            if not trash:
+                return False, "No trash mailbox found (no \\Trash special-use folder)"
+            typ, data = conn.uid("MOVE", mid, trash)
+            if typ != "OK":
+                # RFC 6851 unsupported: COPY + flag \Deleted + EXPUNGE
+                t1, _ = conn.uid("COPY", mid, trash)
+                t2, _ = conn.uid("STORE", mid, "+FLAGS", r"(\Deleted)")
+                conn.expunge()
+                if t1 != "OK" or t2 != "OK":
+                    return False, f"Move failed: {typ} {data}"
+            return True, ""
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+    except Exception as e:
+        return False, str(e)
+
 def main():
     if len(sys.argv) < 3:
         print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete> <id>"}))
@@ -160,26 +240,24 @@ def main():
         cmd = ["himalaya", "flag", "remove", "-f", "seen", "--", mid]
     elif action == "delete":
         remove_from_cache(mid)
-        candidates = [
-            ["himalaya", "message", "move", "--to", "TRASH", "--", mid],
-            ["himalaya", "message", "move", "-f", "INBOX", "--to", "TRASH", "--", mid],
-            ["himalaya", "message", "move", "--to", "Trash", "--", mid],
-            ["himalaya", "message", "move", "-f", "INBOX", "--to", "Trash", "--", mid],
-            ["himalaya", "message", "move", "--to", "[Gmail]/Trash", "--", mid],
-            ["himalaya", "message", "move", "--to", "trash", "--", mid],
-        ]
-        success = False
-        last_err = ""
-        for c in candidates:
-            out, err, code = run_himalaya_safe(c, timeout=10.0)
-            if code == 0:
-                success = True
-                break
-            last_err = err or out
-        if success:
+        ok, err = delete_message(mid)
+        if not ok:
+            # himalaya fallback for accounts without IMAP password creds (e.g. OAuth)
+            candidates = [
+                ["himalaya", "message", "move", "-f", "INBOX", "--to", "TRASH", "--", mid],
+                ["himalaya", "message", "move", "--to", "[Gmail]/Trash", "--", mid],
+                ["himalaya", "message", "move", "--to", "trash", "--", mid],
+            ]
+            for c in candidates:
+                out, err, code = run_himalaya_safe(c, timeout=10.0)
+                if code == 0:
+                    ok, err = True, ""
+                    break
+                err = err or out
+        if ok:
             print(json.dumps({"success": True, "id": mid, "action": action}))
         else:
-            print(json.dumps({"success": False, "error": last_err or "Failed to delete message", "id": mid}))
+            print(json.dumps({"success": False, "error": err or "Failed to delete message", "id": mid}))
         sys.exit(0)
     else:
         print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
