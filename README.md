@@ -137,34 +137,6 @@ omarchy-shell omarmail openMessage <id> # Open specific email detail
 
 ---
 
-## ⚙️ Settings
-
-### Panel Size
-
-Resize the popup panel by adding `panelWidth` and `panelHeight` to the `omarmail` entry in `~/.config/omarchy/shell.json`:
-
-```json
-{
-  "id": "omarmail",
-  "panelWidth": 900,
-  "panelHeight": 700
-}
-```
-
-- `panelWidth`: 320–1200, default 720
-- `panelHeight`: 300–900, default 620 (inbox only; the detail view stays content-driven)
-- Out-of-range values are clamped. Changes apply when the widget loads — restart the shell with `omarchy-restart-shell` after editing.
-
-### Category Filtering
-
-Toggle Gmail categories (Promotions, Social, Updates, Forums) on or off directly from the inbox header. Click a chip to hide that category, click again to show it.
-
-- Messages matching hidden categories are removed from the inbox, unread badge, and search.
-- Works with both plain IMAP and ortie OAuth (Gmail REST API).
-- Settings are stored in `~/.config/omarmail/excluded.json`.
-
----
-
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
