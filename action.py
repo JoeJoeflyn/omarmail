@@ -143,17 +143,74 @@ def run_himalaya_safe(cmd, timeout=12.0):
 import re
 
 def load_imap_credentials():
-    """Parse IMAP server/login/password from himalaya's config (single source of truth)."""
+    """Parse IMAP credentials from himalaya config — plain IMAP or ortie OAuth."""
     try:
         with open(os.path.expanduser("~/.config/himalaya/config.toml"), "rb") as f:
             cfg = tomllib.load(f)
-        account = cfg["accounts"]["personal"]
-        server = account["imap"]["server"]
-        user = account["imap"]["sasl"]["plain"]["username"]
-        pw = account["imap"]["sasl"]["plain"]["password"]["raw"]
-        return server, user, pw
+        accounts = cfg.get("accounts", {})
+        for account in accounts.values():
+            if "imap" in account and "sasl" in account["imap"]:
+                server = account["imap"]["server"]
+                user = account["imap"]["sasl"]["plain"]["username"]
+                pw = account["imap"]["sasl"]["plain"]["password"]["raw"]
+                return server, user, pw, "plain"
+        for account in accounts.values():
+            token_cmd = account.get("gmail", {}).get("auth", {}).get("token", {}).get("command")
+            if token_cmd:
+                token = subprocess.run(token_cmd, capture_output=True, text=True, timeout=8).stdout.strip()
+                if token:
+                    email = None
+                    try:
+                        for pg in range(1, 6):
+                            r = subprocess.run(["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
+                                               capture_output=True, text=True, timeout=8)
+                            if r.returncode != 0 or not r.stdout.strip():
+                                break
+                            for env in json.loads(r.stdout).get("envelopes", []):
+                                for field in ("to", "cc", "bcc"):
+                                    for recip in env.get(field, []):
+                                        if recip.get("email") and "@gmail.com" in recip["email"]:
+                                            email = recip["email"]; break
+                                    if email: break
+                                if email: break
+                            if email: break
+                    except Exception:
+                        pass
+                    if email:
+                        return "imap.gmail.com:993", email, token, "xoauth2"
+        return None
     except Exception:
         return None
+
+def resolve_uid_by_msgid(conn, himalaya_id):
+    """Resolve an IMAP UID from a himalaya envelope ID by matching Message-ID.
+
+    Gmail REST API returns hex envelope IDs that don't match IMAP UIDs. We look
+    up the message-id from himalaya's cached envelope list, then search IMAP.
+    """
+    try:
+        msgid = None
+        for pg in range(1, 6):
+            r = subprocess.run(["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
+                               capture_output=True, text=True, timeout=12)
+            if r.returncode != 0 or not r.stdout.strip():
+                break
+            for env in json.loads(r.stdout).get("envelopes", []):
+                if env.get("id") == himalaya_id:
+                    msgid = (env.get("message-id") or "").strip("<>")
+                    break
+            if msgid:
+                break
+        if not msgid:
+            return None
+        typ, data = conn.uid("SEARCH", f'HEADER Message-ID "{msgid}"')
+        if typ == "OK" and data and data[0]:
+            uids = data[0].decode().split()
+            if uids:
+                return uids[0]
+    except Exception:
+        pass
+    return None
 
 def find_trash_mailbox(conn):
     """Return the trash mailbox wire name via its \\Trash special-use attribute.
@@ -186,7 +243,7 @@ def delete_message(mid):
     creds = load_imap_credentials()
     if not creds:
         return False, "Cannot read IMAP credentials from ~/.config/himalaya/config.toml"
-    server, user, pw = creds
+    server, user, pw, auth_type = creds
     host, _, port = server.partition(":")
     try:
         port = int(port) if port else 993
@@ -195,18 +252,29 @@ def delete_message(mid):
     try:
         conn = imaplib.IMAP4_SSL(host, port, timeout=10)
         try:
-            conn.login(user, pw)
+            if auth_type == "xoauth2":
+                auth_str = f"user={user}\x01auth=Bearer {pw}\x01\x01"
+                conn.authenticate("XOAUTH2", lambda _: auth_str.encode())
+            else:
+                conn.login(user, pw)
             typ, _ = conn.select("INBOX")
             if typ != "OK":
                 return False, f"Failed to select INBOX: {typ}"
             trash = find_trash_mailbox(conn)
             if not trash:
                 return False, "No trash mailbox found (no \\Trash special-use folder)"
-            typ, data = conn.uid("MOVE", mid, trash)
+            # himalaya envelope IDs aren't always IMAP UIDs (Gmail REST gives hex IDs).
+            # Resolve the real UID via the Message-ID header.
+            uid = mid
+            if not mid.isdigit():
+                uid = resolve_uid_by_msgid(conn, mid)
+                if not uid:
+                    return False, f"Could not resolve IMAP UID for message {mid}"
+            typ, data = conn.uid("MOVE", uid, trash)
             if typ != "OK":
                 # RFC 6851 unsupported: COPY + flag \Deleted + EXPUNGE
-                t1, _ = conn.uid("COPY", mid, trash)
-                t2, _ = conn.uid("STORE", mid, "+FLAGS", r"(\Deleted)")
+                t1, _ = conn.uid("COPY", uid, trash)
+                t2, _ = conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
                 conn.expunge()
                 if t1 != "OK" or t2 != "OK":
                     return False, f"Move failed: {typ} {data}"
