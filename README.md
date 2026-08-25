@@ -40,17 +40,17 @@ omarchy plugin add https://github.com/JoeJoeflyn/omarmail
 
 ### Add to Status Bar
 
-Add `"omarmail"` to your status bar section in `~/.config/omarchy/shell.json`:
+Add an `omarmail` entry to the right section of the bar layout in `~/.config/omarchy/shell.json`:
 
-```jsonc
+```json
 {
   "bar": {
-    "sections": {
+    "layout": {
       "right": [
-        "omarmail",
-        "omarchy.network",
-        "omarchy.audio",
-        "omarchy.battery"
+        { "id": "omarmail" },
+        { "id": "omarchy.network" },
+        { "id": "omarchy.audio" },
+        { "id": "omarchy.battery" }
       ]
     }
   }
@@ -84,18 +84,21 @@ tar -xzf /tmp/ortie.tgz -C ~/.local/bin
 aarch64 Linux: use `ortie.aarch64-linux.tgz` with sha256 `667586c32ec3d087a40418014f286f0b8912001d32deef94edf668a634d898c6`.
 
 ### 3. Configure Your Mailbox
-Create or configure `~/.config/himalaya/config.toml`:
+Create or configure `~/.config/himalaya/config.toml`. Note: `omarchy pkg add himalaya` installs himalaya v2, which uses a flat `imap.*` schema — the legacy v1 keys (`imap.host`, `imap.port`, `imap.login`, `imap.auth`) no longer parse.
 
 ```toml
 [accounts.personal]
 default = true
 email = "you@example.com"
-backend = "imap"
-imap.host = "imap.example.com"
-imap.port = 993
-imap.login = "you@example.com"
-imap.auth = "password" # or oauth2
+mailbox.alias.inbox = "INBOX"
+imap.server = "imap.example.com:993"
+imap.sasl.plain.username = "you@example.com"
+imap.sasl.plain.password.raw = "your-app-password"
 ```
+
+For Gmail, use `imap.server = "imap.gmail.com:993"` with an [app password](https://support.google.com/accounts/answer/185833) in `imap.sasl.plain.password.raw` — not your account password. Keep the account named `personal` — the plugin reads `accounts.personal` from this file.
+
+For Gmail OAuth instead: install ortie (step 2), then sign in when the panel prompts — the plugin writes `~/.config/ortie/config.toml` and the himalaya OAuth config automatically.
 
 ---
 
@@ -152,4 +155,4 @@ omarchy plugin remove omarmail
 rm -rf ~/.cache/omarmail
 ```
 
-Then remove `"omarmail"` from your status bar section in `~/.config/omarchy/shell.json`.
+Then remove the `{"id": "omarmail"}` entry from the right section of the bar layout in `~/.config/omarchy/shell.json`.
