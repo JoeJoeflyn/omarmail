@@ -27,7 +27,6 @@
   - Instant live fuzzy filtering by sender, email address, or subject.
   - Full IMAP query integration (`from:`, `to:`, `subject:`, `is:unread`, etc.).
 - **Gmail Category Toggles**: Hide Promotions, Social, Updates, or Forums with one click from the inbox header.
-- **Resizable Panel**: Adjust panel size via `panelWidth` and `panelHeight` in your `shell.json` entry.
 - **Keyboard First Navigation**: Full navigation via keyboard shortcuts (`j`/`k`, `Enter`, `Escape`, `u`, `d`, `/`, `r`).
 
 ---
