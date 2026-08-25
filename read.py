@@ -28,10 +28,27 @@ from concurrent.futures import ThreadPoolExecutor
 CACHE_DIR = os.path.expanduser("~/.cache/omarmail/images")
 MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
 BASE_CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
+AVATAR_MAP_PATH = os.path.join(BASE_CACHE_DIR, "avatar_map.json")
 PAGES_DIR = os.path.join(BASE_CACHE_DIR, "pages")
 INBOX_CACHE = os.path.join(BASE_CACHE_DIR, "inbox_cache.json")
 os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
 os.makedirs(MSG_CACHE_DIR, mode=0o700, exist_ok=True)
+
+
+def load_avatar_map():
+    try:
+        with open(AVATAR_MAP_PATH, "r") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_avatar_map(m):
+    try:
+        with open(AVATAR_MAP_PATH, "w") as f:
+            json.dump(m, f)
+    except OSError:
+        pass
 
 def update_envelope_cache_seen(mid):
     if os.path.exists(INBOX_CACHE):
@@ -759,16 +776,25 @@ def main():
         for f in from_list
     ) or "github" in from_name.lower()
 
+    avatar_map = load_avatar_map() if is_github else {}
+    map_key = from_name.strip().lower()
+
     if is_github and raw_html_content:
+        # Scrape the actual avatar URL from the email body — these are stable
+        # per-user URLs (avatars.githubusercontent.com/u/{id}) and always correct.
         github_avatars = re.findall(r'<img[^>]+src=[\"\'](https?://avatars\.githubusercontent\.com/[^\s\"\'>]+)', raw_html_content, re.IGNORECASE)
         target_avatar = None
         if github_avatars:
             target_avatar = html.unescape(github_avatars[0])
             target_avatar = re.sub(r's=\d+', 's=80', target_avatar)
-        elif from_name and from_name not in ["Unknown", "GitHub", "notifications"]:
-            clean_user = re.sub(r'[^a-zA-Z0-9_\-]', '', from_name.split()[0])
-            if clean_user:
-                target_avatar = f"https://github.com/{clean_user}.png?size=80"
+            # Cache the from_name -> remote avatar URL so future emails from
+            # this person that lack an embedded avatar still resolve correctly.
+            if map_key and avatar_map.get(map_key) != target_avatar:
+                avatar_map[map_key] = target_avatar
+                save_avatar_map(avatar_map)
+        elif map_key and map_key in avatar_map:
+            # No avatar in this email's body, but we've seen one before for this sender.
+            target_avatar = avatar_map[map_key]
 
         if target_avatar:
             _, local_avatar = download_image(target_avatar)
