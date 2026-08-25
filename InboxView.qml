@@ -81,6 +81,42 @@ Flickable {
       }
     }
 
+    // Category toggle chips
+    Row {
+      width: parent.width
+      leftPadding: Style.space(12); rightPadding: Style.space(12)
+      spacing: Style.space(6)
+
+      Repeater {
+        model: [
+          { label: "Promotions", term: "category:promotions" },
+          { label: "Social", term: "category:social" },
+          { label: "Updates", term: "category:updates" },
+          { label: "Forums", term: "category:forums" }
+        ]
+        delegate: BorderSurface {
+          property bool hidden: p.excludedTerms.indexOf(modelData.term) >= 0
+          implicitWidth: chipText.implicitWidth + Style.space(20)
+          implicitHeight: chipText.implicitHeight + Style.space(8)
+          color: hidden ? Style.selectedFillFor(p.foreground, Color.accent) : "transparent"
+          borderSpec: Border.controlSpec("normal", hidden ? Color.accent : p.dim, Color.accent)
+          radius: Style.cornerRadius
+          MouseArea {
+            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+            onClicked: p.toggleCategory(modelData.term, !parent.hidden)
+          }
+          Text {
+            id: chipText
+            anchors.centerIn: parent
+            text: modelData.label
+            color: parent.hidden ? Color.accent : p.dim
+            font.family: p.fontFamily; font.pixelSize: Style.font.caption
+            font.strikeout: parent.hidden
+          }
+        }
+      }
+    }
+
     // Search Field
     Item {
       visible: p.searchOpen || p.searchMode

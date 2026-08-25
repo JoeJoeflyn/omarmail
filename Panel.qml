@@ -55,6 +55,8 @@ Panel {
   property string searchNextPage: ""
   property bool hasMorePages: false
 
+  property var excludedTerms: []
+
   property int cursorIndex: 0
   property bool cursorActive: false
 
@@ -84,7 +86,7 @@ Panel {
   readonly property bool searchProcRunning: searchProc.running
   property int keyCatcherHeight: 0
 
-  Component.onCompleted: cacheInitProc.running = true
+  Component.onCompleted: { cacheInitProc.running = true; loadExcludedTerms() }
 
   // ---- Lifecycle
   function open() {
@@ -141,6 +143,20 @@ Panel {
       fetchPage(currentPage, true)
     }
     if (viewMode === "detail" && selectedId !== "") readMessage(selectedId)
+  }
+
+  function loadExcludedTerms() {
+    filterTermsProc.command = ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), "--get-excluded"]
+    filterTermsProc.running = true
+  }
+
+  function toggleCategory(term, checked) {
+    var terms = excludedTerms.slice()
+    if (checked && terms.indexOf(term) < 0) terms.push(term)
+    else if (!checked) terms = terms.filter(function(t) { return t !== term })
+    excludedTerms = terms
+    filterSetProc.command = ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), "--set-excluded", JSON.stringify(terms)]
+    filterSetProc.running = true
   }
 
   function runSearch(query, pageToken) {
@@ -470,6 +486,25 @@ Panel {
   }
 
   Timer { id: refreshTimer; interval: 60000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
+
+  Process {
+    id: filterTermsProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.excludedTerms = JSON.parse(String(text || "{}")).terms || [] }
+        catch (e) {}
+      }
+    }
+  }
+
+  Process {
+    id: filterSetProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: { root.refresh() }
+    }
+  }
 
   // IPC
   IpcHandler {
