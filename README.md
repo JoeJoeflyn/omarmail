@@ -157,15 +157,11 @@ Resize the popup panel by adding `panelWidth` and `panelHeight` to the `omarmail
 
 ### Category Filtering
 
-Hide Gmail categories (promotions, social, …) by creating `~/.config/omarmail/excluded.json` as a JSON array of Gmail search terms:
+Toggle Gmail categories (Promotions, Social, Updates, Forums) on or off directly from the inbox header. Click a chip to hide that category, click again to show it.
 
-```json
-["category:promotions", "category:social"]
-```
-
-- Messages matching any term are hidden from the inbox, unread badge, and search.
-- Takes effect on the next refresh (`omarchy-shell omarmail refresh` or the 60-second auto-refresh) — no restart or cache clearing needed.
-- Gmail system categories only match `category:` terms (`category:promotions`, `category:social`, …); `label:` and `X-GM-LABELS` return nothing for them. Custom labels use `label:<name>`.
+- Messages matching hidden categories are removed from the inbox, unread badge, and search.
+- Works with both plain IMAP and ortie OAuth (Gmail REST API).
+- Settings are stored in `~/.config/omarmail/excluded.json`.
 
 ---
 
