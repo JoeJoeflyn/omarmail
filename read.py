@@ -665,8 +665,16 @@ def main():
         print(json.dumps({"error": "Invalid message ID", "id": mid}))
         sys.exit(1)
     force = "--force" in sys.argv
+    # Panel width drives HTML rendering; defaults to 660 (pre-resize behavior)
+    panel_width = 660
+    if "--width" in sys.argv:
+        try:
+            wi = sys.argv.index("--width")
+            panel_width = max(320, min(1200, int(sys.argv[wi + 1])))
+        except (ValueError, IndexError):
+            pass
     # Use basename to strip any path components as defense-in-depth
-    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}.json"))
+    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}_{panel_width}.json"))
 
     # Fast path: instant return from cache (TOCTOU-safe — open directly)
     update_envelope_cache_seen(mid)
@@ -739,7 +747,7 @@ def main():
         body_html = text_to_rich_html(raw_text)
     elif html_parts:
         raw_html = html_parts[0]["body"]["Html"]
-        body_html = sanitize_and_enrich_html(raw_html)
+        body_html = sanitize_and_enrich_html(raw_html, panel_width=panel_width)
     elif text_parts:
         raw_text = text_parts[0]["body"]["Text"]
         body_html = text_to_rich_html(raw_text)

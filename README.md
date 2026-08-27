@@ -26,6 +26,7 @@
 - **Live Search & Gmail Filter**:
   - Instant live fuzzy filtering by sender, email address, or subject.
   - Full IMAP query integration (`from:`, `to:`, `subject:`, `is:unread`, etc.).
+- **Gmail Category Toggles**: Hide Promotions, Social, Updates, or Forums with one click from the inbox header.
 - **Keyboard First Navigation**: Full navigation via keyboard shortcuts (`j`/`k`, `Enter`, `Escape`, `u`, `d`, `/`, `r`).
 
 ---
@@ -153,6 +154,7 @@ Uninstall the plugin and clean up cached data:
 ```bash
 omarchy plugin remove omarmail
 rm -rf ~/.cache/omarmail
+rm -rf ~/.config/omarmail
 ```
 
 Then remove the `{"id": "omarmail"}` entry from the right section of the bar layout in `~/.config/omarchy/shell.json`.
