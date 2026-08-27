@@ -229,7 +229,7 @@ Panel {
   function toggleSeen(id, currentSeen) { if (currentSeen) markUnread(id); else markRead(id) }
 
   function deleteMessage(id) {
-    pendingMoveId = id; moveProc.running = false
+    pendingMoveId = id
     var wasInDetail = viewMode === "detail" && selectedId === id
     localRemove(id)
     moveProc.command = ["python3", Qt.resolvedUrl("action.py").toString().replace("file://", ""), "delete", id]
