@@ -233,59 +233,40 @@ def find_trash_mailbox(conn):
     return None
 
 def delete_message(mid):
-    """Move one message to the account's trash mailbox via imaplib.
+    """Move message to trash via native himalaya delete with direct IMAP fallback."""
+    # 1. Native himalaya message delete — works for Gmail REST (OAuth), IMAP, JMAP, Maildir
+    out, err, code = run_himalaya_safe(["himalaya", "message", "delete", "--", mid], timeout=8.0)
+    if code == 0:
+        return True, ""
 
-    himalaya's `message move` misreports Gmail moves: the message lands in the
-    trash but the command exits 1 with "NO System Error", so the plugin showed
-    an error despite the delete working. Driving IMAP directly with UID MOVE
-    reports the server's real response.
-    """
+    # 2. Direct IMAP fallback for accounts with plain IMAP credentials
     creds = load_imap_credentials()
-    if not creds:
-        return False, "Cannot read IMAP credentials from ~/.config/himalaya/config.toml"
-    server, user, pw, auth_type = creds
-    host, _, port = server.partition(":")
-    try:
-        port = int(port) if port else 993
-    except ValueError:
-        port = 993
-    try:
-        conn = imaplib.IMAP4_SSL(host, port, timeout=10)
+    if creds and creds[3] != "xoauth2":
+        server, user, pw, auth_type = creds
+        host, _, port = server.partition(":")
         try:
-            if auth_type == "xoauth2":
-                auth_str = f"user={user}\x01auth=Bearer {pw}\x01\x01"
-                conn.authenticate("XOAUTH2", lambda _: auth_str.encode())
-            else:
-                conn.login(user, pw)
-            typ, _ = conn.select("INBOX")
-            if typ != "OK":
-                return False, f"Failed to select INBOX: {typ}"
-            trash = find_trash_mailbox(conn)
-            if not trash:
-                return False, "No trash mailbox found (no \\Trash special-use folder)"
-            # himalaya envelope IDs aren't always IMAP UIDs (Gmail REST gives hex IDs).
-            # Resolve the real UID via the Message-ID header.
-            uid = mid
-            if not mid.isdigit():
-                uid = resolve_uid_by_msgid(conn, mid)
-                if not uid:
-                    return False, f"Could not resolve IMAP UID for message {mid}"
-            typ, data = conn.uid("MOVE", uid, trash)
-            if typ != "OK":
-                # RFC 6851 unsupported: COPY + flag \Deleted + EXPUNGE
-                t1, _ = conn.uid("COPY", uid, trash)
-                t2, _ = conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
-                conn.expunge()
-                if t1 != "OK" or t2 != "OK":
-                    return False, f"Move failed: {typ} {data}"
-            return True, ""
-        finally:
+            port = int(port) if port else 993
+            conn = imaplib.IMAP4_SSL(host, port, timeout=5)
             try:
-                conn.logout()
-            except Exception:
-                pass
-    except Exception as e:
-        return False, str(e)
+                conn.login(user, pw)
+                typ, _ = conn.select("INBOX")
+                if typ == "OK":
+                    trash = find_trash_mailbox(conn)
+                    if trash:
+                        uid = mid if mid.isdigit() else resolve_uid_by_msgid(conn, mid)
+                        if uid:
+                            typ, data = conn.uid("MOVE", uid, trash)
+                            if typ == "OK":
+                                return True, ""
+            finally:
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return False, err or out or "Failed to delete message via himalaya"
 
 def main():
     if len(sys.argv) < 3:
@@ -309,24 +290,12 @@ def main():
     elif action == "delete":
         remove_from_cache(mid)
         ok, err = delete_message(mid)
-        if not ok:
-            # himalaya fallback for accounts without IMAP password creds (e.g. OAuth)
-            candidates = [
-                ["himalaya", "message", "move", "-f", "INBOX", "--to", "TRASH", "--", mid],
-                ["himalaya", "message", "move", "--to", "[Gmail]/Trash", "--", mid],
-                ["himalaya", "message", "move", "--to", "trash", "--", mid],
-            ]
-            for c in candidates:
-                out, err, code = run_himalaya_safe(c, timeout=10.0)
-                if code == 0:
-                    ok, err = True, ""
-                    break
-                err = err or out
         if ok:
             print(json.dumps({"success": True, "id": mid, "action": action}))
+            sys.exit(0)
         else:
             print(json.dumps({"success": False, "error": err or "Failed to delete message", "id": mid}))
-        sys.exit(0)
+            sys.exit(1)
     else:
         print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
         sys.exit(1)
