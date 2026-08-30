@@ -174,7 +174,7 @@ Flickable {
 
     // General error
     Item {
-      visible: p.ready && p.errorMsg !== "" && !p.needsAuth && !p.authInProgress
+      visible: p.ready && p.errorMsg !== "" && !p.needsAuth && !p.authInProgress && p.envelopes.length === 0
       width: parent.width; implicitHeight: errText.implicitHeight + Style.space(24)
       Text { id: errText; anchors.centerIn: parent; width: parent.width - Style.space(32); textFormat: Text.PlainText; text: p.errorMsg; color: p.urgent; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter }
     }
@@ -187,12 +187,49 @@ Flickable {
       Text { textFormat: Text.PlainText; text: "Loading inbox..."; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.horizontalCenter: parent.horizontalCenter }
     }
 
-    // Empty
+    // Empty State (Search empty vs Inbox zero)
     Column {
       visible: p.ready && p.envelopes.length === 0 && p.errorMsg === "" && !p.needsAuth && !p.authInProgress
-      width: parent.width; spacing: Style.space(8); topPadding: Style.space(24); bottomPadding: Style.space(24)
-      Text { text: "\uf00c"; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.title; anchors.horizontalCenter: parent.horizontalCenter }
-      Text { textFormat: Text.PlainText; text: p.searchMode ? "No matching emails found" : "All caught up! Inbox is clear."; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.horizontalCenter: parent.horizontalCenter }
+      width: parent.width - Style.space(32)
+      anchors.horizontalCenter: parent.horizontalCenter
+      spacing: Style.space(8)
+      topPadding: Style.space(36)
+      bottomPadding: Style.space(36)
+
+      BorderSurface {
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Style.space(52); height: Style.space(52)
+        radius: width / 2.0
+        color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.12)
+        borderSpec: Border.flat(Color.accent, 1)
+
+        Text {
+          anchors.centerIn: parent
+          text: p.searchMode ? "\uf002" : "\uf00c"
+          color: Color.accent
+          font.family: p.fontFamily
+          font.pixelSize: Style.font.title * 1.3
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: p.searchMode ? "No matching emails found" : "All caught up!"
+        color: p.foreground
+        font.family: p.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+        anchors.horizontalCenter: parent.horizontalCenter
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: p.searchMode ? "Try searching with different keywords or operators." : "Your inbox is clear. No unread messages."
+        color: p.dim
+        font.family: p.fontFamily
+        font.pixelSize: Style.font.caption
+        anchors.horizontalCenter: parent.horizontalCenter
+      }
     }
 
     // Email Rows

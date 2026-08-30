@@ -103,7 +103,7 @@ function unreadCount(envelopes) {
 }
 
 function parseEnvelopeList(raw) {
-  if (!raw) return { envelopes: [], error: "No output" }
+  if (!raw || String(raw).trim() === "") return { envelopes: [], error: "" }
   try {
     var parsed = JSON.parse(raw)
     if (parsed.error) return { envelopes: [], error: parsed.error }

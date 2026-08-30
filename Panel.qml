@@ -135,6 +135,7 @@ Panel {
   }
 
   function refresh() {
+    errorMsg = ""
     if (searchMode && !gmailSearch && searchQuery !== "") {
       fetchPage(1, true)
     } else if (gmailSearch) {
@@ -232,9 +233,11 @@ Panel {
     pendingMoveId = id
     var wasInDetail = viewMode === "detail" && selectedId === id
     localRemove(id)
+    moveProc.running = false
     moveProc.command = ["python3", Qt.resolvedUrl("action.py").toString().replace("file://", ""), "delete", id]
     moveProc.running = true
     if (wasInDetail) backToInbox()
+    Qt.callLater(function() { root.fetchPage(root.currentPage, false) })
   }
 
   function openInGmail(id) { Qt.openUrlExternally("https://mail.google.com/mail/u/0/#inbox/" + id) }
@@ -356,6 +359,7 @@ Panel {
             root.allEnvelopes = validEnvs
             if (!root.searchMode) root.envelopes = validEnvs
             root.envelopesRevision++
+            root.errorMsg = ""
             root.ready = true
           }
         } catch (e) {}
@@ -390,6 +394,7 @@ Panel {
           root.allEnvelopes = validEnvs
           root.envelopes = (root.searchMode && !root.gmailSearch && root.searchQuery !== "") ? Model.fuzzyFilter(validEnvs, root.searchQuery) : validEnvs
           root.envelopesRevision++
+          root.errorMsg = ""
         }
         if (result.error && (result.error.indexOf("prompt") >= 0 || result.error.indexOf("TTY") >= 0 || result.error.indexOf("token") >= 0 || result.error.indexOf("auth") >= 0 || result.error.indexOf("credential") >= 0 || result.error.indexOf("401") >= 0 || result.error.indexOf("Unauthorized") >= 0)) {
           root.needsAuth = true; root.errorMsg = ""
@@ -467,6 +472,7 @@ Panel {
         try {
           var res = JSON.parse(String(text || "{}"))
           if (!res.success && res.error) root.errorMsg = res.error
+          else root.errorMsg = ""
         } catch (e) {}
       }
     }
@@ -479,7 +485,12 @@ Panel {
       onStreamFinished: {
         try {
           var res = JSON.parse(String(text || "{}"))
-          if (!res.success && res.error) root.errorMsg = res.error
+          if (!res.success && res.error) {
+            root.errorMsg = res.error
+          } else {
+            root.errorMsg = ""
+            root.fetchPage(root.currentPage, true)
+          }
         } catch (e) {}
       }
     }

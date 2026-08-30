@@ -80,21 +80,53 @@ def remove_from_cache(mid):
 
     if os.path.exists(PAGES_DIR):
         try:
+            # Group page files by page_size
+            sizes = set()
             for fname in os.listdir(PAGES_DIR):
                 if fname.startswith("p_") and fname.endswith(".json"):
-                    fpath = os.path.join(PAGES_DIR, fname)
+                    parts = fname[:-5].split("_")
+                    if len(parts) == 3 and parts[1].isdigit():
+                        sizes.add(int(parts[1]))
+
+            for p_size in sizes:
+                all_envs = []
+                max_page = 0
+                for pg in range(1, 25):
+                    fpath = os.path.join(PAGES_DIR, f"p_{p_size}_{pg}.json")
+                    if not os.path.exists(fpath):
+                        break
+                    max_page = pg
                     try:
                         with open(fpath, "r", encoding="utf-8") as f:
-                            page_data = json.load(f)
-                        page_envs = page_data if isinstance(page_data, list) else page_data.get("envelopes", [])
-                        new_page_envs = [e for e in page_envs if e.get("id") != mid]
-                        if len(new_page_envs) != len(page_envs):
-                            tmp_p = fpath + ".tmp"
-                            with open(tmp_p, "w", encoding="utf-8") as f:
-                                json.dump(new_page_envs, f, ensure_ascii=False)
-                            os.replace(tmp_p, fpath)
+                            pdata = json.load(f)
+                        penvs = pdata if isinstance(pdata, list) else pdata.get("envelopes", [])
+                        all_envs.extend(penvs)
                     except Exception:
                         pass
+
+                # Remove the deleted envelope
+                all_envs = [e for e in all_envs if e.get("id") != mid]
+
+                # Re-chunk and save back
+                for pg in range(1, max_page + 1):
+                    fpath = os.path.join(PAGES_DIR, f"p_{p_size}_{pg}.json")
+                    start_idx = (pg - 1) * p_size
+                    chunk = all_envs[start_idx:start_idx + p_size]
+                    if chunk:
+                        tmp_p = fpath + ".tmp"
+                        with open(tmp_p, "w", encoding="utf-8") as f:
+                            json.dump(chunk, f, ensure_ascii=False)
+                        os.replace(tmp_p, fpath)
+                        if pg == 1:
+                            tmp_inbox = INBOX_CACHE + ".tmp"
+                            with open(tmp_inbox, "w", encoding="utf-8") as f:
+                                json.dump(chunk, f, ensure_ascii=False)
+                            os.replace(tmp_inbox, INBOX_CACHE)
+                    elif os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                        except Exception:
+                            pass
         except Exception:
             pass
 

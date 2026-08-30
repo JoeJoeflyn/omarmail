@@ -179,10 +179,21 @@ def get_cached_page(page_size, page):
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict) and "envelopes" in data:
-                    return data["envelopes"]
+                envs = data if isinstance(data, list) else data.get("envelopes", [])
+                if isinstance(envs, list) and len(envs) > 0:
+                    if len(envs) < page_size:
+                        next_cache = get_page_cache_path(page_size, page + 1)
+                        if os.path.exists(next_cache):
+                            try:
+                                with open(next_cache, "r", encoding="utf-8") as nf:
+                                    ndata = json.load(nf)
+                                    nenvs = ndata if isinstance(ndata, list) else ndata.get("envelopes", [])
+                                    if nenvs:
+                                        need = page_size - len(envs)
+                                        envs = envs + nenvs[:need]
+                            except Exception:
+                                pass
+                    return envs
         except Exception:
             pass
     # Fallback for page 1 to legacy inbox_cache.json
@@ -274,17 +285,24 @@ def fetch_envelopes_direct(page_size, page):
         return {"envelopes": [], "error": str(e)}
 
 def fetch_envelopes_filtered(page_size, page):
-    """Fetch with exclusion; pull extra pages if filtering shrinks results."""
-    if not load_excluded_terms():
-        return fetch_envelopes_direct(page_size, page)
+    """Fetch with exclusion; pull extra pages if filtering or deletion shrinks results."""
     collected = []
-    for p in range(page, page + 3):
+    has_exclusions = bool(load_excluded_terms())
+    for p in range(page, page + 4):
         result = fetch_envelopes_direct(page_size, p)
         envs = result.get("envelopes", [])
-        if not envs: break
-        collected.extend(envs)
-        if len(apply_exclusion(collected)) >= page_size: break
-    return {"envelopes": apply_exclusion(collected)[:page_size], "error": ""}
+        if not envs:
+            if not collected and result.get("error"):
+                return result
+            break
+        filtered = apply_exclusion(envs) if has_exclusions else envs
+        collected.extend(filtered)
+        if len(collected) >= page_size:
+            break
+    final_envs = collected[:page_size]
+    if final_envs:
+        save_page_cache(page_size, page, final_envs)
+    return {"envelopes": final_envs, "error": ""}
 
 def trigger_prefetch(page_size, target_page):
     """Launch background fetch for next/prev page if not cached."""
