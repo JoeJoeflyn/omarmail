@@ -575,8 +575,17 @@ def text_to_rich_html(raw_text):
     # 5. Markdown links [text](url)
     t = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', r'<a href="\2" style="color: #60a5fa; text-decoration: underline; font-weight: 500;">\1</a>', t)
 
-    # 6. Raw URLs
-    t = re.sub(r'(?<!href=\")(?<!\">)(https?://[^\s<>\)]+)', r'<a href="\1" style="color: #60a5fa; text-decoration: underline;">\1</a>', t)
+    # 6. Raw URLs — strip trailing closing punctuation (e.g. "[http://x.com]" or "http://x.com.") so it stays outside the link
+    def _autolink(m):
+        url = m.group(1)
+        trail = ""
+        while url and url[-1] in ")]},.;:!?":
+            trail = url[-1] + trail
+            url = url[:-1]
+        if not url:
+            return m.group(0)
+        return f'<a href="{url}" style="color: #60a5fa; text-decoration: underline;">{url}</a>{trail}'
+    t = re.sub(r'(?<!href=\")(?<!\">)(https?://[^\s<>\)]+)', _autolink, t)
 
     # 7. Code blocks ```...```
     def repl_cb(m):
