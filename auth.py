@@ -16,8 +16,9 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import urllib.parse
+
+from secure_io import atomic_write_text, ensure_private_dir, run_bounded
 
 REDIRECT_PORT = 8421
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}"
@@ -61,9 +62,8 @@ drafts = "DRAFTS"
 trash = "TRASH"
 """
 
-def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.stdout.strip(), r.stderr.strip(), r.returncode
+def run(cmd, timeout=30):
+    return run_bounded(cmd, timeout=timeout, max_output_bytes=1024 * 1024)
 
 def ensure_configs():
     """Write ortie + himalaya configs if they don't exist."""
@@ -71,14 +71,12 @@ def ensure_configs():
     himalaya_path = os.path.expanduser("~/.config/himalaya/config.toml")
 
     if not os.path.exists(ortie_path):
-        os.makedirs(os.path.dirname(ortie_path), exist_ok=True)
-        with open(ortie_path, "w") as f:
-            f.write(ORTIE_CONFIG)
+        ensure_private_dir(os.path.dirname(ortie_path))
+        atomic_write_text(ortie_path, ORTIE_CONFIG)
 
     if not os.path.exists(himalaya_path):
-        os.makedirs(os.path.dirname(himalaya_path), exist_ok=True)
-        with open(himalaya_path, "w") as f:
-            f.write(HIMALAYA_CONFIG)
+        ensure_private_dir(os.path.dirname(himalaya_path))
+        atomic_write_text(himalaya_path, HIMALAYA_CONFIG)
 
 def print_ortie_install_hint():
     """Print a pinned, checksummed install path — never pipe a mutable installer."""
@@ -90,9 +88,11 @@ def print_ortie_install_hint():
             f"https://github.com/pimalaya/ortie/releases/download/"
             f"{ORTIE_VERSION}/ortie.{machine}-linux.tgz"
         )
-        print(f"  curl -sSL -o /tmp/ortie.tgz {url}")
-        print(f"  echo '{sha}  /tmp/ortie.tgz' | sha256sum -c")
-        print("  mkdir -p ~/.local/bin && tar -xzf /tmp/ortie.tgz -C ~/.local/bin")
+        print("  archive=$(mktemp --suffix=.ortie.tgz)")
+        print("  trap 'rm -f \"$archive\"' EXIT")
+        print(f"  curl --fail --proto '=https' --tlsv1.2 -sSL -o \"$archive\" {url}")
+        print(f"  echo \"{sha}  $archive\" | sha256sum -c")
+        print("  mkdir -p ~/.local/bin && tar -xzf \"$archive\" -C ~/.local/bin")
     else:
         print("  Download the .tgz for your arch, verify the GitHub release digest,")
         print("  then extract the binary into ~/.local/bin/")
@@ -101,7 +101,7 @@ def print_ortie_install_hint():
 def check_dependencies():
     """Verify himalaya and ortie are installed."""
     for binary in ["himalaya", "ortie"]:
-        stdout, _, code = run(["which", binary])
+        _stdout, _, code = run(["which", binary])
         if code != 0:
             print(f"ERROR: {binary} is not installed")
             if binary == "himalaya":
@@ -135,7 +135,13 @@ def main():
         sys.exit(1)
 
     # 2. Open the authorization URL in the browser
-    subprocess.run(["xdg-open", auth_url], capture_output=True)
+    subprocess.Popen(
+        ["xdg-open", auth_url],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
     # 3. Start a local HTTP server to catch the redirect
     result = {"uri": None}

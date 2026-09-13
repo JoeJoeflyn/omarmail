@@ -7,94 +7,86 @@ Extracts:
 - body_html: rich, dark-theme compatible HTML with inline local cached images
 - body: clean fallback text
 """
-import json
-import re
-import os
-import html
-from html.parser import HTMLParser
-import subprocess
-import sys
 import hashlib
-import struct
-import socket
-import ssl
+import html
 import http.client
 import ipaddress
-import urllib.request
+import json
+import os
+import re
+import socket
+import ssl
+import sys
 import urllib.parse
-import urllib.error
-from concurrent.futures import ThreadPoolExecutor
+from html.parser import HTMLParser
 
-CACHE_DIR = os.path.expanduser("~/.cache/omarmail/images")
-MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
-BASE_CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
+from secure_io import (
+    atomic_write_bytes,
+    atomic_write_json,
+    ensure_private_dir,
+    read_bytes,
+    read_json,
+    read_text,
+    run_bounded,
+)
+
+BASE_CACHE_DIR = ensure_private_dir(os.path.expanduser("~/.cache/omarmail"))
+CACHE_DIR = ensure_private_dir(os.path.join(BASE_CACHE_DIR, "images"))
+MSG_CACHE_DIR = ensure_private_dir(os.path.join(BASE_CACHE_DIR, "messages"))
 AVATAR_MAP_PATH = os.path.join(BASE_CACHE_DIR, "avatar_map.json")
-PAGES_DIR = os.path.join(BASE_CACHE_DIR, "pages")
+PAGES_DIR = ensure_private_dir(os.path.join(BASE_CACHE_DIR, "pages"))
 INBOX_CACHE = os.path.join(BASE_CACHE_DIR, "inbox_cache.json")
-os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
-os.makedirs(MSG_CACHE_DIR, mode=0o700, exist_ok=True)
+CACHE_SCHEMA_VERSION = 2
+MAX_RENDERED_BODY_CHARS = 256 * 1024
+MAX_JSON_OUTPUT_BYTES = 1024 * 1024
 
 
 def load_avatar_map():
-    try:
-        with open(AVATAR_MAP_PATH, "r") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    value = read_json(AVATAR_MAP_PATH, default={}, max_bytes=1024 * 1024)
+    return value if isinstance(value, dict) else {}
 
 
-def save_avatar_map(m):
+def save_avatar_map(value):
     try:
-        with open(AVATAR_MAP_PATH, "w") as f:
-            json.dump(m, f)
+        atomic_write_json(AVATAR_MAP_PATH, value)
     except OSError:
         pass
 
-def update_envelope_cache_seen(mid):
-    if os.path.exists(INBOX_CACHE):
-        try:
-            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            envelopes = data if isinstance(data, list) else data.get("envelopes", [])
-            for env in envelopes:
-                if env.get("id") == mid:
-                    flags = env.get("flags", [])
-                    flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
-                    flags.append({"raw": "\\Seen", "iana": "seen"})
-                    env["flags"] = flags
-            tmp = INBOX_CACHE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(envelopes, f, ensure_ascii=False)
-            os.replace(tmp, INBOX_CACHE)
-        except Exception:
-            pass
 
-    if os.path.exists(PAGES_DIR):
-        try:
-            for fname in os.listdir(PAGES_DIR):
-                if fname.startswith("p_") and fname.endswith(".json"):
-                    fpath = os.path.join(PAGES_DIR, fname)
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            page_data = json.load(f)
-                        page_envs = page_data if isinstance(page_data, list) else page_data.get("envelopes", [])
-                        modified = False
-                        for env in page_envs:
-                            if env.get("id") == mid:
-                                flags = env.get("flags", [])
-                                flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
-                                flags.append({"raw": "\\Seen", "iana": "seen"})
-                                env["flags"] = flags
-                                modified = True
-                        if modified:
-                            tmp_p = fpath + ".tmp"
-                            with open(tmp_p, "w", encoding="utf-8") as f:
-                                json.dump(page_envs, f, ensure_ascii=False)
-                            os.replace(tmp_p, fpath)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+def _cached_envelopes(path):
+    data = read_json(path, default=None)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        envelopes = data.get("envelopes", [])
+        return envelopes if isinstance(envelopes, list) else []
+    return None
+
+
+def update_envelope_cache_seen(mid):
+    paths = [INBOX_CACHE] + [
+        os.path.join(PAGES_DIR, name)
+        for name in os.listdir(PAGES_DIR)
+        if name.startswith("p_") and name.endswith(".json")
+    ]
+    for path in paths:
+        envelopes = _cached_envelopes(path)
+        if envelopes is None:
+            continue
+        modified = False
+        for envelope in envelopes:
+            if envelope.get("id") != mid:
+                continue
+            flags = envelope.get("flags", [])
+            flags = [flag for flag in flags if (flag.get("iana") if isinstance(flag, dict) else str(flag)).lower() != "seen"]
+            flags.append({"raw": "\\Seen", "iana": "seen"})
+            envelope["flags"] = flags
+            modified = True
+        if modified:
+            try:
+                atomic_write_json(path, envelopes, ensure_ascii=False)
+            except OSError:
+                pass
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB max per image
 
@@ -173,10 +165,6 @@ def is_valid_image_bytes(data):
         return True
     return False
 
-def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.stdout.strip(), r.stderr.strip(), r.returncode
-
 def extract_header_value(val):
     if isinstance(val, dict):
         if "Text" in val:
@@ -206,71 +194,6 @@ def format_date_pretty(iso_or_str):
         return f"{d} {mon_name} {y}, {h:02d}:{mi:02d}"
     return iso_or_str
 
-def get_image_size(file_path):
-    """Read PNG/JPEG/GIF dimensions from headers without third-party libraries."""
-    try:
-        with open(file_path, "rb") as f:
-            head = f.read(32)
-            if head.startswith(b"\x89PNG\r\n\x1a\n"):
-                w, h = struct.unpack(">II", head[16:24])
-                return int(w), int(h)
-            elif head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
-                w, h = struct.unpack("<HH", head[6:10])
-                return int(w), int(h)
-            elif head.startswith(b"\xff\xd8"):
-                f.seek(0)
-                data = f.read()
-                size = len(data)
-                idx = 2
-                while idx < size:
-                    if data[idx] != 0xff:
-                        break
-                    marker = data[idx+1]
-                    idx += 2
-                    if marker in (0xc0, 0xc1, 0xc2, 0xc3):
-                        idx += 3
-                        h, w = struct.unpack(">HH", data[idx:idx+4])
-                        return int(w), int(h)
-                    elif marker in (0xd9, 0xda):
-                        break
-                    else:
-                        length, = struct.unpack(">H", data[idx:idx+2])
-                        idx += length
-    except Exception:
-        pass
-    return None, None
-
-def get_scaled_img_tag(local_path, panel_width=360):
-    lw, lh = get_image_size(local_path)
-    if not lw or lw <= 2 or not lh or lh <= 2:
-        return ""
-    
-    # Store badges (Google Play / App Store)
-    if "play" in local_path.lower() or "appstore" in local_path.lower() or (lw >= 100 and lh <= 50 and (lw / max(lh, 1)) >= 2.2):
-        target_w = min(lw, 110)
-        target_h = int(target_w * lh / max(lw, 1))
-        return f'<img src="file://{local_path}" width="{target_w}" height="{target_h}">'
-
-    # Small icon / avatar / logo
-    if lw <= 128 and lh <= 128:
-        target_w = min(lw, 36)
-        target_h = int(target_w * lh / max(lw, 1))
-        return f'<img src="file://{local_path}" width="{target_w}" height="{target_h}">'
-
-    # Wide banner
-    if lw >= 200 and (lw / max(lh, 1)) >= 1.4:
-        scaled_w = panel_width
-        scaled_h = int(panel_width * lh / max(lw, 1))
-        return f'<p align="center" style="margin: 6px 0;"><img src="file://{local_path}" width="{scaled_w}" height="{scaled_h}"></p>'
-    
-    # Large content image
-    if lw > panel_width:
-        scaled_w = panel_width
-        scaled_h = int(panel_width * lh / max(lw, 1))
-        return f'<p align="center" style="margin: 6px 0;"><img src="file://{local_path}" width="{scaled_w}" height="{scaled_h}"></p>'
-
-    return f'<img src="file://{local_path}" width="{min(lw, panel_width)}">'
-
 def download_image(url, _depth=0):
     """Download and cache remote email images with SSRF protection, size limits, and magic-byte checks.
     Pins the resolved IP to prevent DNS rebinding — the DNS check and actual
@@ -293,7 +216,8 @@ def download_image(url, _depth=0):
         h = hashlib.sha256(url.encode("utf-8")).hexdigest()
         ext = ".png" if ".png" in low else (".jpg" if ".jpg" in low or ".jpeg" in low else (".gif" if ".gif" in low else ".png"))
         target = os.path.join(CACHE_DIR, f"{h}{ext}")
-        if os.path.exists(target) and os.path.getsize(target) > 0:
+        cached_image = read_bytes(target, default=None, max_bytes=MAX_IMAGE_SIZE)
+        if cached_image and is_valid_image_bytes(cached_image):
             return url, target
 
         parsed = urllib.parse.urlsplit(url)
@@ -362,19 +286,7 @@ def download_image(url, _depth=0):
         if len(data) < 16 or not is_valid_image_bytes(data):
             return url, None
 
-        tmp_target = target + ".tmp"
-        fd = os.open(tmp_target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with open(fd, "wb") as f:
-            f.write(data)
-        try:
-            os.chmod(tmp_target, 0o600)
-        except Exception:
-            pass
-        os.replace(tmp_target, target)
-        try:
-            os.chmod(target, 0o600)
-        except Exception:
-            pass
+        atomic_write_bytes(target, data)
         return url, target
     except Exception:
         return url, None
@@ -515,15 +427,14 @@ def sanitize_and_enrich_html(raw_html, panel_width=660):
     return builder.get_html()
 
 def text_to_rich_html(raw_text):
-    """Convert text/markdown email into clean, modern rich HTML with tables, code blocks, headers, details cards, and links."""
+    """Convert untrusted plain text/Markdown into a safe Qt RichText subset."""
     if not raw_text:
         return ""
 
-    # Normalize CRLF / CR linebreaks
-    t = raw_text.replace('\r\n', '\n').replace('\r', '\n')
-
-    # 1. Strip raw HTML comments <!-- ... -->
-    t = re.sub(r'<!--.*?-->', '', t, flags=re.DOTALL)
+    # Escape before adding our own small markup subset. This prevents a plain
+    # message from injecting Qt-supported tags such as img/a into the shell.
+    t = html.escape(raw_text[:MAX_RENDERED_BODY_CHARS], quote=True)
+    t = t.replace('\r\n', '\n').replace('\r', '\n')
 
     # 2. Markdown tables
     def format_table(match):
@@ -536,28 +447,14 @@ def text_to_rich_html(raw_text):
         for l in lines[2:]:
             cols = [c.strip() for c in l.strip('|').split('|')]
             rows.append(cols)
-        th_html = "".join([f'<th style="border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; background: rgba(255,255,255,0.08); color: #ffffff; font-weight: 600; text-align: left;">{html.escape(h)}</th>' for h in headers])
+        th_html = "".join([f'<th style="border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; background: rgba(255,255,255,0.08); color: #ffffff; font-weight: 600; text-align: left;">{h}</th>' for h in headers])
         tr_html = []
         for r in rows:
-            td_html = "".join([f'<td style="border: 1px solid rgba(255,255,255,0.08); padding: 7px 12px; color: #cbd5e1;">{html.escape(c)}</td>' for c in r])
+            td_html = "".join([f'<td style="border: 1px solid rgba(255,255,255,0.08); padding: 7px 12px; color: #cbd5e1;">{c}</td>' for c in r])
             tr_html.append(f'<tr style="background: rgba(0,0,0,0.15);">{td_html}</tr>')
         return f'<table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12);"><thead><tr>{th_html}</tr></thead><tbody>{"".join(tr_html)}</tbody></table>'
 
     table_pattern = r'(?:^[ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-: |]+\|[ \t]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)*)'
-
-    # 3. Clean up common GitHub raw HTML tags embedded in text:
-    # <h3>...</h3>, <h2>...</h2>, <h4>...</h4>
-    t = re.sub(r'<h([1-6])[^>]*>(.*?)</h\1>', r'\n\n<h\1 style="margin: 14px 0 6px 0; color: #60a5fa; font-size: 15px; font-weight: 700;">\2</h\1>\n\n', t, flags=re.IGNORECASE | re.DOTALL)
-    
-    # <details><summary>...</summary>...</details>
-    def format_details(m):
-        summary_m = re.search(r'<summary[^>]*>(.*?)</summary>', m.group(0), flags=re.IGNORECASE | re.DOTALL)
-        summary_text = summary_m.group(1).strip() if summary_m else "Details"
-        summary_text = re.sub(r'</?[^>]+>', '', summary_text).strip()
-        inner = re.sub(r'<summary[^>]*>.*?</summary>', '', m.group(1), flags=re.IGNORECASE | re.DOTALL).strip()
-        inner = re.sub(table_pattern, format_table, inner, flags=re.MULTILINE)
-        return f'<div style="margin: 12px 0; padding: 10px 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;"><div style="font-weight: 600; color: #93c5fd; margin-bottom: 6px;">📂 {summary_text}</div><div style="margin-top: 6px;">{inner}</div></div>'
-    t = re.sub(r'<details[^>]*>(.*?)</details>', format_details, t, flags=re.IGNORECASE | re.DOTALL)
 
     # Convert standalone tables
     t = re.sub(table_pattern, format_table, t, flags=re.MULTILINE)
@@ -568,8 +465,7 @@ def text_to_rich_html(raw_text):
     # 4. GitHub Email Footer (--\nReply to this email...)
     def format_footer(m):
         footer_text = m.group(1).strip()
-        footer_html = html.escape(footer_text)
-        return f'<div style="margin-top: 20px; padding: 10px 14px; border-top: 1px dashed rgba(255,255,255,0.15); font-size: 11px; color: #64748b; line-height: 1.5;">{footer_html.replace(chr(10), "<br>")}</div>'
+        return f'<div style="margin-top: 20px; padding: 10px 14px; border-top: 1px dashed rgba(255,255,255,0.15); font-size: 11px; color: #64748b; line-height: 1.5;">{footer_text.replace(chr(10), "<br>")}</div>'
     t = re.sub(r'\n--\s*\n(Reply to this email directly.*)$', format_footer, t, flags=re.DOTALL)
 
     # 5. Markdown links [text](url)
@@ -590,7 +486,7 @@ def text_to_rich_html(raw_text):
     # 7. Code blocks ```...```
     def repl_cb(m):
         code = m.group(1).strip()
-        return f'<pre style="margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; font-family: monospace; font-size: 12px; color: #f8fafc; overflow-x: auto;">{html.escape(code)}</pre>'
+        return f'<pre style="margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; font-family: monospace; font-size: 12px; color: #f8fafc; overflow-x: auto;">{code}</pre>'
     t = re.sub(r'```(?:[a-zA-Z0-9_\-]+)?\n?(.*?)```', repl_cb, t, flags=re.DOTALL)
 
     # 8. Inline code `...`
@@ -626,54 +522,37 @@ def text_to_rich_html(raw_text):
     res = '\n'.join(out)
     return f'<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 13px; line-height: 1.55; color: #e2e8f0; width: 100%; word-break: break-word;">\n{res}\n</div>'
 
-import tempfile
-
 def run_himalaya_safe(cmd, timeout=15.0):
-    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
-         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
-        tmp_out_name = tmp_out.name
-        tmp_err_name = tmp_err.name
-        try:
-            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                    proc.wait()
-                except Exception:
-                    pass
-                return "", "Request timed out", 1
-
-            tmp_out.seek(0)
-            out = tmp_out.read().strip()
-            tmp_err.seek(0)
-            err = tmp_err.read().strip()
-            return out, err, proc.returncode
-        finally:
-            try:
-                os.unlink(tmp_out_name)
-            except Exception:
-                pass
-            try:
-                os.unlink(tmp_err_name)
-            except Exception:
-                pass
+    return run_bounded(cmd, timeout=timeout, max_output_bytes=4 * 1024 * 1024)
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if not args:
-        print(json.dumps({"error": "No message ID provided"}))
+    mailbox = "inbox"
+    positional = []
+    index = 1
+    while index < len(sys.argv):
+        argument = sys.argv[index]
+        if argument in ("--mailbox", "--width"):
+            if argument == "--mailbox":
+                mailbox = sys.argv[index + 1].lower() if index + 1 < len(sys.argv) else ""
+            index += 2
+            continue
+        if not argument.startswith("--"):
+            positional.append(argument)
+        index += 1
+    if not positional:
+        print(json.dumps({"error": "No message ID provided", "mailbox": mailbox}))
         sys.exit(1)
 
-    mid = args[0]
+    mid = positional[0]
     # Validate message ID — only allow alphanumeric, dash, underscore, dot
     # Prevents path traversal via ../ in the cache filename
-    if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
-        print(json.dumps({"error": "Invalid message ID", "id": mid}))
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', mid):
+        print(json.dumps({"error": "Invalid message ID", "id": mid, "mailbox": mailbox}))
         sys.exit(1)
     force = "--force" in sys.argv
+    if mailbox not in ("inbox", "trash"):
+        print(json.dumps({"error": "Invalid mailbox", "id": mid, "mailbox": mailbox}))
+        sys.exit(1)
     # Panel width drives HTML rendering; defaults to 660 (pre-resize behavior)
     panel_width = 660
     if "--width" in sys.argv:
@@ -683,31 +562,35 @@ def main():
         except (ValueError, IndexError):
             pass
     # Use basename to strip any path components as defense-in-depth
-    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mid}_{panel_width}.json"))
+    cache_file = os.path.join(MSG_CACHE_DIR, os.path.basename(f"{mailbox}_{mid}_{panel_width}.json"))
 
     # Fast path: instant return from cache (TOCTOU-safe — open directly)
-    update_envelope_cache_seen(mid)
+    if mailbox == "inbox":
+        update_envelope_cache_seen(mid)
     if not force:
-        try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                cached_data = f.read()
-                if cached_data.strip():
+        cached_data = read_text(cache_file, default=None, max_bytes=MAX_JSON_OUTPUT_BYTES)
+        if cached_data:
+            try:
+                cached = json.loads(cached_data)
+                if cached.get("cache_version") == CACHE_SCHEMA_VERSION:
                     print(cached_data)
                     return
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+            except (AttributeError, ValueError):
+                pass
 
-    out, err, code = run_himalaya_safe(["himalaya", "message", "read", "--json", "--", mid])
+    command = ["himalaya", "message", "read", "--json"]
+    if mailbox != "inbox":
+        command.extend(["--mailbox", mailbox])
+    command.extend(["--", mid])
+    out, err, code = run_himalaya_safe(command)
     if code != 0 or not out:
-        print(json.dumps({"error": err or "Failed to read message", "id": mid}))
+        print(json.dumps({"error": err or "Failed to read message", "id": mid, "mailbox": mailbox}))
         sys.exit(0)
 
     try:
         msg = json.loads(out)
     except Exception as e:
-        print(json.dumps({"error": f"JSON parse error: {e}", "id": mid}))
+        print(json.dumps({"error": f"JSON parse error: {e}", "id": mid, "mailbox": mailbox}))
         sys.exit(0)
 
     parts = msg.get("parts", [])
@@ -755,7 +638,7 @@ def main():
         raw_text = text_parts[0]["body"]["Text"]
         body_html = text_to_rich_html(raw_text)
     elif html_parts:
-        raw_html = html_parts[0]["body"]["Html"]
+        raw_html = html_parts[0]["body"]["Html"][:MAX_RENDERED_BODY_CHARS]
         body_html = sanitize_and_enrich_html(raw_html, panel_width=panel_width)
     elif text_parts:
         raw_text = text_parts[0]["body"]["Text"]
@@ -818,10 +701,12 @@ def main():
             if local_avatar and os.path.exists(local_avatar):
                 real_av = os.path.realpath(local_avatar)
                 real_cache = os.path.realpath(CACHE_DIR)
-                if real_av.startswith(real_cache):
+                if os.path.commonpath((real_av, real_cache)) == real_cache:
                     avatar_url = f"file://{real_av}"
 
     output = {
+        "cache_version": CACHE_SCHEMA_VERSION,
+        "mailbox": mailbox,
         "id": mid,
         "subject": subject_str or "(No Subject)",
         "from": from_list,
@@ -840,24 +725,16 @@ def main():
         "error": ""
     }
 
+    serialized = json.dumps(output, ensure_ascii=False)
+    if len(serialized.encode("utf-8")) > MAX_JSON_OUTPUT_BYTES:
+        output = {"id": mid, "error": "Message exceeds safe display size"}
+        serialized = json.dumps(output)
     try:
-        tmp_file = cache_file + ".tmp"
-        fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with open(fd, "w", encoding="utf-8") as f:
-            json.dump(output, f, ensure_ascii=False)
-        try:
-            os.chmod(tmp_file, 0o600)
-        except Exception:
-            pass
-        os.replace(tmp_file, cache_file)
-        try:
-            os.chmod(cache_file, 0o600)
-        except Exception:
-            pass
-    except Exception:
+        atomic_write_json(cache_file, output, ensure_ascii=False)
+    except OSError:
         pass
 
-    print(json.dumps(output))
+    print(serialized)
 
 if __name__ == "__main__":
     main()

@@ -7,43 +7,14 @@ to get IDs, then `message read --json` for each to extract headers.
 Output: JSON array of envelopes on stdout, same shape as `envelope list --json`.
 """
 import json
-import subprocess
 import sys
-import os
-import tempfile
+
+from secure_io import run_bounded
+
+MAX_SEARCH_OUTPUT_BYTES = 2 * 1024 * 1024
 
 def run(cmd, timeout=15.0):
-    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
-         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
-        tmp_out_name = tmp_out.name
-        tmp_err_name = tmp_err.name
-        try:
-            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                    proc.wait()
-                except Exception:
-                    pass
-                return "", "Search timed out", 1
-
-            tmp_out.seek(0)
-            out = tmp_out.read().strip()
-            tmp_err.seek(0)
-            err = tmp_err.read().strip()
-            return out, err, proc.returncode
-        finally:
-            try:
-                os.unlink(tmp_out_name)
-            except Exception:
-                pass
-            try:
-                os.unlink(tmp_err_name)
-            except Exception:
-                pass
+    return run_bounded(cmd, timeout=timeout, max_output_bytes=1024 * 1024)
 
 def extract_header_value(val):
     if isinstance(val, dict):
@@ -120,6 +91,9 @@ def main():
     if not query:
         print(json.dumps({"envelopes": [], "next_page": ""}))
         return
+    if len(query) > 1024 or any(char in query for char in ("\x00", "\r", "\n")):
+        print(json.dumps({"error": "Invalid search query", "envelopes": []}))
+        sys.exit(1)
 
     # 1. Get IDs from Gmail
     cmd = ["himalaya", "gmail", "messages", "list", "--json", "-q", query, "-s", page_size]
@@ -137,20 +111,29 @@ def main():
         print(json.dumps({"error": "Failed to parse listing", "envelopes": []}))
         sys.exit(1)
 
-    ids = [item["id"] for item in listing.get("ids", [])]
+    ids = [item["id"] for item in listing.get("ids", []) if isinstance(item, dict) and "id" in item][:int(page_size)]
     next_page = listing.get("next_page", "")
 
     # 2. Fetch each message's headers
     envelopes = []
+    envelope_bytes = 0
     for mid in ids:
         stdout, _, code = run(["himalaya", "message", "read", "--json", "--", mid])
         if code != 0:
             continue
         env = parse_message_to_envelope(stdout, mid)
         if env:
+            envelope_bytes += len(json.dumps(env).encode("utf-8"))
+            if envelope_bytes > MAX_SEARCH_OUTPUT_BYTES:
+                print(json.dumps({"error": "Search results exceed safe display size", "envelopes": []}))
+                sys.exit(1)
             envelopes.append(env)
 
-    print(json.dumps({"envelopes": envelopes, "next_page": next_page}))
+    output = json.dumps({"envelopes": envelopes, "next_page": next_page})
+    if len(output.encode("utf-8")) > MAX_SEARCH_OUTPUT_BYTES:
+        print(json.dumps({"error": "Search results exceed safe display size", "envelopes": []}))
+        sys.exit(1)
+    print(output)
 
 if __name__ == "__main__":
     main()

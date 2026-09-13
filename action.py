@@ -1,218 +1,113 @@
 #!/usr/bin/env python3
 """Omarmail safe action helper for flagging and moving messages with error isolation and cache synchronization."""
-import sys
-import os
-import json
-import subprocess
 import imaplib
-import tomllib
+import json
+import os
 import re
+import sys
 
-CACHE_DIR = os.path.expanduser("~/.cache/omarmail")
+from credentials import load_imap_credentials as load_credentials
+from secure_io import atomic_write_json, ensure_private_dir, read_json, run_bounded
+
+CACHE_DIR = ensure_private_dir(os.path.expanduser("~/.cache/omarmail"))
 INBOX_CACHE = os.path.join(CACHE_DIR, "inbox_cache.json")
-PAGES_DIR = os.path.join(CACHE_DIR, "pages")
+PAGES_DIR = ensure_private_dir(os.path.join(CACHE_DIR, "pages"))
+MSG_CACHE_DIR = ensure_private_dir(os.path.join(CACHE_DIR, "messages"))
+HIMALAYA_CONFIG = os.path.expanduser("~/.config/himalaya/config.toml")
 
-def update_cache_flag(mid, seen=True):
-    # 1. Update legacy inbox_cache.json
-    if os.path.exists(INBOX_CACHE):
-        try:
-            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            envelopes = data if isinstance(data, list) else data.get("envelopes", [])
-            for env in envelopes:
-                if env.get("id") == mid:
-                    flags = env.get("flags", [])
-                    flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
-                    if seen:
-                        flags.append({"raw": "\\Seen", "iana": "seen"})
-                    env["flags"] = flags
-            tmp = INBOX_CACHE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(envelopes, f, ensure_ascii=False)
-            os.replace(tmp, INBOX_CACHE)
-        except Exception:
-            pass
+def _envelopes_from_cache(path):
+    data = read_json(path, default=None)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        envelopes = data.get("envelopes", [])
+        return envelopes if isinstance(envelopes, list) else []
+    return None
 
-    # 2. Update multi-page cache files in pages/
-    if os.path.exists(PAGES_DIR):
-        try:
-            for fname in os.listdir(PAGES_DIR):
-                if fname.startswith("p_") and fname.endswith(".json"):
-                    fpath = os.path.join(PAGES_DIR, fname)
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            page_data = json.load(f)
-                        page_envs = page_data if isinstance(page_data, list) else page_data.get("envelopes", [])
-                        modified = False
-                        for env in page_envs:
-                            if env.get("id") == mid:
-                                flags = env.get("flags", [])
-                                flags = [f for f in flags if (f.get("iana") if isinstance(f, dict) else str(f)).lower() != "seen"]
-                                if seen:
-                                    flags.append({"raw": "\\Seen", "iana": "seen"})
-                                env["flags"] = flags
-                                modified = True
-                        if modified:
-                            tmp_p = fpath + ".tmp"
-                            with open(tmp_p, "w", encoding="utf-8") as f:
-                                json.dump(page_envs, f, ensure_ascii=False)
-                            os.replace(tmp_p, fpath)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-MSG_CACHE_DIR = os.path.expanduser("~/.cache/omarmail/messages")
+def update_cache_flag(mid, seen=True, mailbox="inbox"):
+    prefix = "p_" if mailbox == "inbox" else f"{mailbox}_p_"
+    paths = [
+        os.path.join(PAGES_DIR, name)
+        for name in os.listdir(PAGES_DIR)
+        if name.startswith(prefix) and name.endswith(".json")
+    ]
+    if mailbox == "inbox":
+        paths.insert(0, INBOX_CACHE)
+    for path in paths:
+        envelopes = _envelopes_from_cache(path)
+        if envelopes is None:
+            continue
+        modified = False
+        for envelope in envelopes:
+            if envelope.get("id") != mid:
+                continue
+            flags = envelope.get("flags", [])
+            flags = [flag for flag in flags if (flag.get("iana") if isinstance(flag, dict) else str(flag)).lower() != "seen"]
+            if seen:
+                flags.append({"raw": "\\Seen", "iana": "seen"})
+            envelope["flags"] = flags
+            modified = True
+        if modified:
+            try:
+                atomic_write_json(path, envelopes, ensure_ascii=False)
+            except OSError:
+                pass
 
 def remove_from_cache(mid):
-    if os.path.exists(INBOX_CACHE):
+    inbox = _envelopes_from_cache(INBOX_CACHE)
+    if inbox is not None:
         try:
-            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            envelopes = data if isinstance(data, list) else data.get("envelopes", [])
-            envelopes = [e for e in envelopes if e.get("id") != mid]
-            tmp = INBOX_CACHE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(envelopes, f, ensure_ascii=False)
-            os.replace(tmp, INBOX_CACHE)
-        except Exception:
+            atomic_write_json(INBOX_CACHE, [env for env in inbox if env.get("id") != mid], ensure_ascii=False)
+        except OSError:
             pass
 
-    if os.path.exists(PAGES_DIR):
-        try:
-            # Group page files by page_size
-            sizes = set()
-            for fname in os.listdir(PAGES_DIR):
-                if fname.startswith("p_") and fname.endswith(".json"):
-                    parts = fname[:-5].split("_")
-                    if len(parts) == 3 and parts[1].isdigit():
-                        sizes.add(int(parts[1]))
+    sizes = set()
+    for name in os.listdir(PAGES_DIR):
+        parts = name[:-5].split("_") if name.startswith("p_") and name.endswith(".json") else []
+        if len(parts) == 3 and parts[1].isdigit():
+            sizes.add(int(parts[1]))
 
-            for p_size in sizes:
-                all_envs = []
-                max_page = 0
-                for pg in range(1, 25):
-                    fpath = os.path.join(PAGES_DIR, f"p_{p_size}_{pg}.json")
-                    if not os.path.exists(fpath):
-                        break
-                    max_page = pg
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            pdata = json.load(f)
-                        penvs = pdata if isinstance(pdata, list) else pdata.get("envelopes", [])
-                        all_envs.extend(penvs)
-                    except Exception:
-                        pass
-
-                # Remove the deleted envelope
-                all_envs = [e for e in all_envs if e.get("id") != mid]
-
-                # Re-chunk and save back
-                for pg in range(1, max_page + 1):
-                    fpath = os.path.join(PAGES_DIR, f"p_{p_size}_{pg}.json")
-                    start_idx = (pg - 1) * p_size
-                    chunk = all_envs[start_idx:start_idx + p_size]
-                    if chunk:
-                        tmp_p = fpath + ".tmp"
-                        with open(tmp_p, "w", encoding="utf-8") as f:
-                            json.dump(chunk, f, ensure_ascii=False)
-                        os.replace(tmp_p, fpath)
-                        if pg == 1:
-                            tmp_inbox = INBOX_CACHE + ".tmp"
-                            with open(tmp_inbox, "w", encoding="utf-8") as f:
-                                json.dump(chunk, f, ensure_ascii=False)
-                            os.replace(tmp_inbox, INBOX_CACHE)
-                    elif os.path.exists(fpath):
-                        try:
-                            os.remove(fpath)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    msg_file = os.path.join(MSG_CACHE_DIR, f"{mid}.json")
-    if os.path.exists(msg_file):
-        try:
-            os.remove(msg_file)
-        except Exception:
-            pass
-
-import tempfile
-
-def run_himalaya_safe(cmd, timeout=12.0):
-    """Execute himalaya writing to a temp file in a detached process group to eliminate BrokenPipe SIGABRT."""
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
-         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
-        tmp_out_name = tmp_out.name
-        tmp_err_name = tmp_err.name
-        try:
-            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
+    for page_size in sizes:
+        envelopes = []
+        paths = []
+        for page in range(1, 25):
+            path = os.path.join(PAGES_DIR, f"p_{page_size}_{page}.json")
+            page_envelopes = _envelopes_from_cache(path)
+            if page_envelopes is None:
+                break
+            paths.append(path)
+            envelopes.extend(page_envelopes)
+        envelopes = [env for env in envelopes if env.get("id") != mid]
+        for index, path in enumerate(paths):
+            chunk = envelopes[index * page_size:(index + 1) * page_size]
             try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                    proc.wait()
-                except Exception:
-                    pass
-                return "", "Action timed out", 1
-
-            tmp_out.seek(0)
-            out = tmp_out.read().strip()
-            tmp_err.seek(0)
-            err = tmp_err.read().strip()
-            return out, err, proc.returncode
-        finally:
-            try:
-                os.unlink(tmp_out_name)
-            except Exception:
-                pass
-            try:
-                os.unlink(tmp_err_name)
-            except Exception:
+                if chunk:
+                    atomic_write_json(path, chunk, ensure_ascii=False)
+                    if index == 0:
+                        atomic_write_json(INBOX_CACHE, chunk, ensure_ascii=False)
+                else:
+                    os.unlink(path)
+            except OSError:
                 pass
 
-import re
+    for name in os.listdir(MSG_CACHE_DIR):
+        if (name.startswith(f"{mid}_") or name.startswith(f"inbox_{mid}_")) and name.endswith(".json"):
+            try:
+                os.unlink(os.path.join(MSG_CACHE_DIR, name))
+            except OSError:
+                pass
+
+def run_himalaya_safe(cmd, timeout=8.0):
+    return run_bounded(cmd, timeout=timeout, max_output_bytes=2 * 1024 * 1024)
 
 def load_imap_credentials():
-    """Parse IMAP credentials from himalaya config — plain IMAP or ortie OAuth."""
-    try:
-        with open(os.path.expanduser("~/.config/himalaya/config.toml"), "rb") as f:
-            cfg = tomllib.load(f)
-        accounts = cfg.get("accounts", {})
-        for account in accounts.values():
-            if "imap" in account and "sasl" in account["imap"]:
-                server = account["imap"]["server"]
-                user = account["imap"]["sasl"]["plain"]["username"]
-                pw = account["imap"]["sasl"]["plain"]["password"]["raw"]
-                return server, user, pw, "plain"
-        for account in accounts.values():
-            token_cmd = account.get("gmail", {}).get("auth", {}).get("token", {}).get("command")
-            if token_cmd:
-                token = subprocess.run(token_cmd, capture_output=True, text=True, timeout=8).stdout.strip()
-                if token:
-                    email = None
-                    try:
-                        for pg in range(1, 6):
-                            r = subprocess.run(["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
-                                               capture_output=True, text=True, timeout=8)
-                            if r.returncode != 0 or not r.stdout.strip():
-                                break
-                            for env in json.loads(r.stdout).get("envelopes", []):
-                                for field in ("to", "cc", "bcc"):
-                                    for recip in env.get(field, []):
-                                        if recip.get("email") and "@gmail.com" in recip["email"]:
-                                            email = recip["email"]; break
-                                    if email: break
-                                if email: break
-                            if email: break
-                    except Exception:
-                        pass
-                    if email:
-                        return "imap.gmail.com:993", email, token, "xoauth2"
-        return None
-    except Exception:
-        return None
+    return load_credentials(HIMALAYA_CONFIG)
+
+def _imap_quote(value):
+    if any(char in value for char in ("\r", "\n", "\x00")):
+        raise ValueError("Invalid IMAP value")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
 
 def resolve_uid_by_msgid(conn, himalaya_id):
     """Resolve an IMAP UID from a himalaya envelope ID by matching Message-ID.
@@ -223,11 +118,14 @@ def resolve_uid_by_msgid(conn, himalaya_id):
     try:
         msgid = None
         for pg in range(1, 6):
-            r = subprocess.run(["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
-                               capture_output=True, text=True, timeout=12)
-            if r.returncode != 0 or not r.stdout.strip():
+            stdout, _, code = run_bounded(
+                ["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
+                timeout=8,
+                max_output_bytes=1024 * 1024,
+            )
+            if code != 0 or not stdout:
                 break
-            for env in json.loads(r.stdout).get("envelopes", []):
+            for env in json.loads(stdout).get("envelopes", []):
                 if env.get("id") == himalaya_id:
                     msgid = (env.get("message-id") or "").strip("<>")
                     break
@@ -235,7 +133,7 @@ def resolve_uid_by_msgid(conn, himalaya_id):
                 break
         if not msgid:
             return None
-        typ, data = conn.uid("SEARCH", f'HEADER Message-ID "{msgid}"')
+        typ, data = conn.uid("SEARCH", "HEADER", "Message-ID", _imap_quote(msgid))
         if typ == "OK" and data and data[0]:
             uids = data[0].decode().split()
             if uids:
@@ -264,6 +162,50 @@ def find_trash_mailbox(conn):
         pass
     return None
 
+IMAP_OP_TIMEOUT = 15  # overall budget for a direct-IMAP fallback operation, seconds
+
+def _imap_delete_direct(mid):
+    """Direct-IMAP trash fallback. Runs in a child process so a hung server (Gmail
+    trickling bytes without ever completing a line) can be killed by the parent's
+    timeout — socket.timeout and SIGALRM cannot interrupt a blocking SSL read."""
+    creds = load_imap_credentials()
+    if not creds or creds[3] == "xoauth2":
+        return False
+    server, user, pw, _auth_type = creds
+    host, _, port = server.partition(":")
+    try:
+        port = int(port) if port else 993
+        conn = imaplib.IMAP4_SSL(host, port, timeout=5)
+        conn.sock.settimeout(5)
+        try:
+            conn.login(user, pw)
+            typ, _ = conn.select("INBOX")
+            if typ == "OK":
+                trash = find_trash_mailbox(conn)
+                if trash:
+                    uid = mid if mid.isdigit() else resolve_uid_by_msgid(conn, mid)
+                    if uid:
+                        typ, _ = conn.uid("MOVE", uid, _imap_quote(trash))
+                        if typ == "OK":
+                            return True
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+def restore_message(mid):
+    """Move a message from the trash mailbox back to the inbox."""
+    out, err, code = run_himalaya_safe(
+        ["himalaya", "message", "move", "--from", "trash", "--to", "inbox", "--", mid],
+        timeout=8.0,
+    )
+    return (True, "") if code == 0 else (False, err or out or "Failed to restore message")
+
+
 def delete_message(mid):
     """Move message to trash via native himalaya delete with direct IMAP fallback."""
     # 1. Native himalaya message delete — works for Gmail REST (OAuth), IMAP, JMAP, Maildir
@@ -271,55 +213,54 @@ def delete_message(mid):
     if code == 0:
         return True, ""
 
-    # 2. Direct IMAP fallback for accounts with plain IMAP credentials
-    creds = load_imap_credentials()
-    if creds and creds[3] != "xoauth2":
-        server, user, pw, auth_type = creds
-        host, _, port = server.partition(":")
-        try:
-            port = int(port) if port else 993
-            conn = imaplib.IMAP4_SSL(host, port, timeout=5)
-            try:
-                conn.login(user, pw)
-                typ, _ = conn.select("INBOX")
-                if typ == "OK":
-                    trash = find_trash_mailbox(conn)
-                    if trash:
-                        uid = mid if mid.isdigit() else resolve_uid_by_msgid(conn, mid)
-                        if uid:
-                            typ, data = conn.uid("MOVE", uid, trash)
-                            if typ == "OK":
-                                return True, ""
-            finally:
-                try:
-                    conn.logout()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    # 2. Direct IMAP fallback. Credential resolution happens only in the
+    # isolated child so password-manager commands are not run twice.
+    try:
+        stdout, _, code = run_bounded(
+            [sys.executable, os.path.abspath(__file__), "--imap-delete", mid],
+            timeout=IMAP_OP_TIMEOUT,
+            max_output_bytes=64 * 1024,
+        )
+        if code == 0 and stdout == "ok":
+            return True, ""
+    except OSError:
+        pass
 
     return False, err or out or "Failed to delete message via himalaya"
 
 def main():
+    if "--imap-delete" in sys.argv:
+        idx = sys.argv.index("--imap-delete")
+        mid = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ""
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", mid):
+            print("fail")
+            sys.exit(1)
+        print("ok" if _imap_delete_direct(mid) else "fail")
+        sys.exit(0)
     if len(sys.argv) < 3:
         print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete> <id>"}))
         sys.exit(1)
 
     action = sys.argv[1]
     mid = sys.argv[2]
+    mailbox = sys.argv[3].lower() if len(sys.argv) > 3 else "inbox"
 
-    # Validate message ID
-    if not re.match(r'^[A-Za-z0-9._\-]+$', mid):
+    # Validate message ID and mailbox
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', mid):
         print(json.dumps({"success": False, "error": "Invalid message ID", "id": mid}))
         sys.exit(1)
+    if mailbox not in ("inbox", "trash"):
+        print(json.dumps({"success": False, "error": "Invalid mailbox", "id": mid}))
+        sys.exit(1)
 
+    mailbox_args = ["--mailbox", mailbox] if mailbox != "inbox" else []
     if action == "mark_read":
-        update_cache_flag(mid, seen=True)
-        cmd = ["himalaya", "flag", "add", "-f", "seen", "--", mid]
+        update_cache_flag(mid, seen=True, mailbox=mailbox)
+        cmd = ["himalaya", "flag", "add", "-f", "seen", *mailbox_args, "--", mid]
     elif action == "mark_unread":
-        update_cache_flag(mid, seen=False)
-        cmd = ["himalaya", "flag", "remove", "-f", "seen", "--", mid]
-    elif action == "delete":
+        update_cache_flag(mid, seen=False, mailbox=mailbox)
+        cmd = ["himalaya", "flag", "remove", "-f", "seen", *mailbox_args, "--", mid]
+    elif action == "delete" and mailbox == "inbox":
         remove_from_cache(mid)
         ok, err = delete_message(mid)
         if ok:
@@ -328,18 +269,27 @@ def main():
         else:
             print(json.dumps({"success": False, "error": err or "Failed to delete message", "id": mid}))
             sys.exit(1)
+    elif action == "restore" and mailbox == "trash":
+        ok, err = restore_message(mid)
+        if ok:
+            print(json.dumps({"success": True, "id": mid, "action": action}))
+            sys.exit(0)
+        print(json.dumps({"success": False, "error": err, "id": mid}))
+        sys.exit(1)
     else:
         print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
         sys.exit(1)
 
     try:
-        out, err, code = run_himalaya_safe(cmd, timeout=12.0)
+        _out, err, code = run_himalaya_safe(cmd, timeout=8.0)
         if code == 0:
             print(json.dumps({"success": True, "id": mid, "action": action}))
         else:
             print(json.dumps({"success": False, "error": err or "Himalaya error", "id": mid}))
+            sys.exit(1)
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e), "id": mid}))
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

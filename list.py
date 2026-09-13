@@ -2,98 +2,75 @@
 """Omarmail ultra-fast envelope lister with multi-page disk caching and background prefetching.
 
 Usage:
-  python3 list.py [page_size] [page] [--cache-only] [--force]
+  python3 list.py [page_size] [page] [--mailbox inbox|trash] [--cache-only] [--force]
 """
-import sys
-import os
-import json
-import time
-import subprocess
-import tempfile
+import fcntl
 import imaplib
-import tomllib
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
 
-CACHE_BASE = os.path.expanduser("~/.cache/omarmail")
-CACHE_DIR = os.path.join(CACHE_BASE, "pages")
-os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
-try:
-    os.chmod(CACHE_BASE, 0o700)
-    os.chmod(CACHE_DIR, 0o700)
-except Exception:
-    pass
+from credentials import load_imap_credentials as load_credentials
+from secure_io import (
+    atomic_write_json,
+    ensure_private_dir,
+    harden_private_file,
+    read_json,
+    run_bounded,
+    safe_mtime,
+)
+
+CACHE_BASE = ensure_private_dir(os.path.expanduser("~/.cache/omarmail"))
+CACHE_DIR = ensure_private_dir(os.path.join(CACHE_BASE, "pages"))
 
 INBOX_CACHE = os.path.join(CACHE_BASE, "inbox_cache.json")
 
 # --- Inbox exclusion filtering ----------------------------------------------
 # Hide messages matching Gmail search terms (e.g. "category:promotions") from
 # every list output. Terms live in ~/.config/omarmail/excluded.json as a JSON
-# array; matched message UIDs are resolved via IMAP X-GM-RAW and cached.
+# array; matched IMAP/Gmail message identifiers are resolved via X-GM-RAW and cached.
 EXCLUDED_CONFIG = os.path.expanduser("~/.config/omarmail/excluded.json")
 EXCLUDED_MSGID_CACHE = os.path.join(CACHE_BASE, "excluded_msgids.json")
+EXCLUDED_REFRESH_LOCK = os.path.join(CACHE_BASE, ".excluded-refresh.lock")
 EXCLUDED_TTL = 300  # seconds
+MAX_EXCLUDED_IDS = 50_000
 HIMALAYA_CONFIG = os.path.expanduser("~/.config/himalaya/config.toml")
+
+ensure_private_dir(os.path.dirname(EXCLUDED_CONFIG))
+for private_file in (INBOX_CACHE, EXCLUDED_MSGID_CACHE, EXCLUDED_CONFIG, os.path.join(CACHE_BASE, "avatar_map.json")):
+    harden_private_file(private_file)
 
 GMAIL_CATEGORIES = ["category:promotions", "category:social", "category:updates", "category:forums"]
 
+def _normalize_excluded_terms(terms):
+    if isinstance(terms, str):
+        terms = [terms]
+    if not isinstance(terms, list):
+        return []
+    return sorted(set(
+        term.strip()
+        for term in terms
+        if isinstance(term, str)
+        and 0 < len(term.strip()) <= 256
+        and not any(char in term for char in ('"', "\\", "\r", "\n"))
+    ))
+
+
 def load_excluded_terms():
     """Read Gmail search terms whose matches are hidden from the inbox."""
-    try:
-        with open(EXCLUDED_CONFIG, "r", encoding="utf-8") as f:
-            terms = json.load(f)
-        if isinstance(terms, str):
-            terms = [terms]
-        return [t.strip() for t in terms if isinstance(t, str) and t.strip() and '"' not in t]
-    except Exception:
-        return []
+    return _normalize_excluded_terms(read_json(EXCLUDED_CONFIG, default=[], max_bytes=64 * 1024))
 
 def save_excluded_terms(terms):
     """Write Gmail search terms to excluded.json."""
-    os.makedirs(os.path.dirname(EXCLUDED_CONFIG), mode=0o700, exist_ok=True)
-    tmp = EXCLUDED_CONFIG + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(sorted(set(terms)), f, indent=2)
-    os.replace(tmp, EXCLUDED_CONFIG)
+    ensure_private_dir(os.path.dirname(EXCLUDED_CONFIG))
+    atomic_write_json(EXCLUDED_CONFIG, _normalize_excluded_terms(terms), indent=2)
 
 def load_imap_credentials():
-    """Parse IMAP credentials from himalaya config — plain IMAP or ortie OAuth."""
-    try:
-        with open(HIMALAYA_CONFIG, "rb") as f:
-            cfg = tomllib.load(f)
-        accounts = cfg.get("accounts", {})
-        for account in accounts.values():
-            if "imap" in account and "sasl" in account["imap"]:
-                server = account["imap"]["server"]
-                user = account["imap"]["sasl"]["plain"]["username"]
-                pw = account["imap"]["sasl"]["plain"]["password"]["raw"]
-                return server, user, pw, "plain"
-        for account in accounts.values():
-            token_cmd = account.get("gmail", {}).get("auth", {}).get("token", {}).get("command")
-            if token_cmd:
-                token = subprocess.run(token_cmd, capture_output=True, text=True, timeout=8).stdout.strip()
-                if token:
-                    email = None
-                    try:
-                        # Search multiple pages for a @gmail.com address in to/cc fields
-                        for pg in range(1, 6):
-                            r = subprocess.run(["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
-                                               capture_output=True, text=True, timeout=8)
-                            if r.returncode != 0 or not r.stdout.strip():
-                                break
-                            for env in json.loads(r.stdout).get("envelopes", []):
-                                for field in ("to", "cc", "bcc"):
-                                    for recip in env.get(field, []):
-                                        if recip.get("email") and "@gmail.com" in recip["email"]:
-                                            email = recip["email"]; break
-                                    if email: break
-                                if email: break
-                            if email: break
-                    except Exception:
-                        pass
-                    if email:
-                        return "imap.gmail.com:993", email, token, "xoauth2"
-        return None
-    except Exception:
-        return None
+    return load_credentials(HIMALAYA_CONFIG)
 
 def _imap_connect(creds):
     server, user, pw, auth_type = creds
@@ -101,6 +78,7 @@ def _imap_connect(creds):
     try: port = int(port) if port else 993
     except ValueError: port = 993
     conn = imaplib.IMAP4_SSL(host, port, timeout=8)
+    conn.sock.settimeout(8)
     if auth_type == "xoauth2":
         auth_str = f"user={user}\x01auth=Bearer {pw}\x01\x01"
         conn.authenticate("XOAUTH2", lambda _: auth_str.encode())
@@ -109,234 +87,225 @@ def _imap_connect(creds):
     conn.select("INBOX")
     return conn
 
-def fetch_excluded_msgids(terms):
-    """Resolve Message-IDs hidden by the given search terms, cached for EXCLUDED_TTL."""
-    if os.path.exists(EXCLUDED_MSGID_CACHE):
-        try:
-            fresh = time.time() - os.path.getmtime(EXCLUDED_MSGID_CACHE) < EXCLUDED_TTL
-            config_newer = (os.path.exists(EXCLUDED_CONFIG) and
-                            os.path.getmtime(EXCLUDED_CONFIG) > os.path.getmtime(EXCLUDED_MSGID_CACHE))
-            if fresh and not config_newer:
-                with open(EXCLUDED_MSGID_CACHE, "r", encoding="utf-8") as f:
-                    return set(json.load(f))
-        except Exception:
-            pass
+IMAP_OP_TIMEOUT = 20  # overall budget for an IMAP exclusion lookup, seconds
+
+def _resolve_excluded_imap(terms):
+    """Resolve IDs hidden by Gmail search for IMAP and Gmail API backends.
+
+    IMAP-backed Himalaya envelopes use UIDs. Gmail API envelopes use the
+    hexadecimal form of X-GM-MSGID, so collect both identifiers in one FETCH.
+    """
     creds = load_imap_credentials()
     if not creds:
-        return set()
-    msgids = set()
+        return None
+    conn = None
     try:
         conn = _imap_connect(creds)
-        try:
-            uids = set()
-            for term in terms:
-                typ, data = conn.uid("SEARCH", f'X-GM-RAW "{term}"')
-                if typ == "OK" and data and data[0]:
-                    uids.update(data[0].decode().split())
-            if uids:
-                uid_list = sorted(uids, key=int)
-                for i in range(0, len(uid_list), 200):
-                    batch = ",".join(uid_list[i:i+200])
-                    typ, data = conn.uid("FETCH", batch, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
-                    if typ == "OK":
-                        for item in data:
-                            if isinstance(item, tuple) and len(item) > 1:
-                                for line in item[1].decode(errors="replace").splitlines():
-                                    if line.lower().startswith("message-id:"):
-                                        mid = line.split(":", 1)[1].strip().strip("<>")
-                                        if mid: msgids.add(mid)
-        finally:
+        uids = set()
+        for term in terms:
+            typ, data = conn.uid("SEARCH", "X-GM-RAW", f'"{term}"')
+            if typ != "OK":
+                return None
+            if data and data[0]:
+                uids.update(uid for uid in data[0].decode("ascii", "ignore").split() if uid.isdigit())
+            if len(uids) > MAX_EXCLUDED_IDS:
+                return None
+
+        identifiers = set(uids)
+        if uids:
+            ordered_uids = sorted(uids, key=lambda uid: int(uid) if uid.isdigit() else uid)
+            typ, data = conn.uid("FETCH", ",".join(ordered_uids), "(X-GM-MSGID)")
+            if typ != "OK":
+                return None
+            for item in data or []:
+                wire = item[0] if isinstance(item, tuple) else item
+                if not isinstance(wire, bytes):
+                    continue
+                for value in re.findall(rb"X-GM-MSGID\s+(\d+)", wire, re.IGNORECASE):
+                    identifiers.add(format(int(value), "x"))
+        return identifiers
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
             try: conn.logout()
             except Exception: pass
-    except Exception:
-        return set()
-    if msgids:
-        try:
-            tmp = EXCLUDED_MSGID_CACHE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(sorted(msgids), f)
-            os.replace(tmp, EXCLUDED_MSGID_CACHE)
-        except Exception:
-            pass
-    return msgids
+
+def _trigger_exclusion_refresh(terms):
+    """Start at most one exclusion refresher across concurrent list calls."""
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        lock_fd = os.open(EXCLUDED_REFRESH_LOCK, flags, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, BlockingIOError):
+        try: os.close(lock_fd)
+        except (NameError, OSError): pass
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--resolve-excluded", json.dumps(terms)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            pass_fds=(lock_fd,),
+        )
+    except OSError:
+        pass
+    finally:
+        os.close(lock_fd)
+
+def fetch_excluded_msgids(terms):
+    """Return cached excluded IDs immediately (fresh or stale), and refresh
+    the cache in the background. Never blocks list rendering on a hung IMAP server:
+    a Gmail trickle-hang previously cost 20s per list call and silently disabled
+    exclusion."""
+    payload = read_json(EXCLUDED_MSGID_CACHE, default=None, max_bytes=4 * 1024 * 1024)
+    cached = set(payload) if isinstance(payload, list) else None
+    modified = safe_mtime(EXCLUDED_MSGID_CACHE)
+    if cached is not None and modified is not None and time.time() - modified < EXCLUDED_TTL:
+        return cached
+    _trigger_exclusion_refresh(terms)
+    return cached if cached is not None else set()
 
 def apply_exclusion(envelopes):
-    """Filter out envelopes whose Message-ID matches an excluded search term."""
+    """Filter envelopes by IMAP UID or Gmail API message ID."""
     terms = load_excluded_terms()
     if not terms:
         return envelopes
     excluded = fetch_excluded_msgids(terms)
     if not excluded:
         return envelopes
-    return [e for e in envelopes if (e.get("message-id") or "").strip("<>") not in excluded]
+    return [e for e in envelopes if str(e.get("id") or "") not in excluded]
 
-def get_page_cache_path(page_size, page):
-    return os.path.join(CACHE_DIR, f"p_{page_size}_{page}.json")
+def get_page_cache_path(page_size, page, mailbox="inbox"):
+    prefix = "p" if mailbox == "inbox" else f"{mailbox}_p"
+    return os.path.join(CACHE_DIR, f"{prefix}_{page_size}_{page}.json")
 
-def get_cached_page(page_size, page):
-    cache_path = get_page_cache_path(page_size, page)
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                envs = data if isinstance(data, list) else data.get("envelopes", [])
-                if isinstance(envs, list) and len(envs) > 0:
-                    if len(envs) < page_size:
-                        next_cache = get_page_cache_path(page_size, page + 1)
-                        if os.path.exists(next_cache):
-                            try:
-                                with open(next_cache, "r", encoding="utf-8") as nf:
-                                    ndata = json.load(nf)
-                                    nenvs = ndata if isinstance(ndata, list) else ndata.get("envelopes", [])
-                                    if nenvs:
-                                        need = page_size - len(envs)
-                                        envs = envs + nenvs[:need]
-                            except Exception:
-                                pass
-                    return envs
-        except Exception:
-            pass
-    # Fallback for page 1 to legacy inbox_cache.json
-    if page == 1 and os.path.exists(INBOX_CACHE):
-        try:
-            with open(INBOX_CACHE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict) and "envelopes" in data:
-                    return data["envelopes"]
-        except Exception:
-            pass
+
+def get_cached_page(page_size, page, mailbox="inbox"):
+    data = read_json(get_page_cache_path(page_size, page, mailbox), default=None)
+    if data is not None:
+        envelopes = data if isinstance(data, list) else data.get("envelopes", [])
+        if isinstance(envelopes, list):
+            if envelopes and len(envelopes) < page_size:
+                next_data = read_json(get_page_cache_path(page_size, page + 1, mailbox), default=None)
+                if next_data is not None:
+                    next_envelopes = next_data if isinstance(next_data, list) else next_data.get("envelopes", [])
+                    if next_envelopes:
+                        envelopes = envelopes + next_envelopes[:page_size - len(envelopes)]
+            return envelopes
+    if mailbox == "inbox" and page == 1:
+        data = read_json(INBOX_CACHE, default=None)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "envelopes" in data:
+            return data["envelopes"]
     return None
 
-def save_page_cache(page_size, page, envelopes):
-    if not envelopes:
-        return
+
+def save_page_cache(page_size, page, envelopes, mailbox="inbox"):
     try:
-        cache_path = get_page_cache_path(page_size, page)
-        tmp = cache_path + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with open(fd, "w", encoding="utf-8") as f:
-            json.dump(envelopes, f, ensure_ascii=False)
-        try:
-            os.chmod(tmp, 0o600)
-        except Exception:
-            pass
-        os.replace(tmp, cache_path)
-        try:
-            os.chmod(cache_path, 0o600)
-        except Exception:
-            pass
-        # If page 1, also mirror to INBOX_CACHE for fast boot
-        if page == 1:
-            tmp_inbox = INBOX_CACHE + ".tmp"
-            fd_inbox = os.open(tmp_inbox, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with open(fd_inbox, "w", encoding="utf-8") as f:
-                json.dump(envelopes, f, ensure_ascii=False)
-            os.replace(tmp_inbox, INBOX_CACHE)
-    except Exception:
+        atomic_write_json(get_page_cache_path(page_size, page, mailbox), envelopes, ensure_ascii=False)
+        if mailbox == "inbox" and page == 1:
+            atomic_write_json(INBOX_CACHE, envelopes, ensure_ascii=False)
+    except OSError:
         pass
 
-def run_himalaya_safe(cmd, timeout=12.0):
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_out_") as tmp_out, \
-         tempfile.NamedTemporaryFile(mode="w+", delete=False, prefix="himalaya_err_") as tmp_err:
-        tmp_out_name = tmp_out.name
-        tmp_err_name = tmp_err.name
-        try:
-            proc = subprocess.Popen(cmd, stdout=tmp_out, stderr=tmp_err, start_new_session=True)
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                    proc.wait()
-                except Exception:
-                    pass
-                return "", "Request timed out", 1
 
-            tmp_out.seek(0)
-            out = tmp_out.read().strip()
-            tmp_err.seek(0)
-            err = tmp_err.read().strip()
-            return out, err, proc.returncode
-        finally:
-            try:
-                os.unlink(tmp_out_name)
-            except Exception:
-                pass
-            try:
-                os.unlink(tmp_err_name)
-            except Exception:
-                pass
+def run_himalaya_safe(cmd, timeout=8.0):
+    return run_bounded(cmd, timeout=timeout, max_output_bytes=2 * 1024 * 1024)
 
-def fetch_envelopes_direct(page_size, page):
+
+def fetch_envelopes_direct(page_size, page, mailbox="inbox"):
     cmd = ["himalaya", "envelope", "list", "--json", "-s", str(page_size), "-p", str(page)]
+    if mailbox != "inbox":
+        cmd.extend(["--mailbox", mailbox])
     try:
-        out, err, code = run_himalaya_safe(cmd, timeout=12.0)
+        out, err, code = run_himalaya_safe(cmd, timeout=8.0)
         if code == 0 and out:
             data = json.loads(out)
             envelopes = data.get("envelopes", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            if envelopes:
-                save_page_cache(page_size, page, envelopes)
-            return {"envelopes": envelopes, "error": ""}
-        else:
-            return {"envelopes": [], "error": err or "Failed to list envelopes"}
-    except Exception as e:
-        return {"envelopes": [], "error": str(e)}
+            save_page_cache(page_size, page, envelopes, mailbox)
+            return {"envelopes": envelopes, "error": "", "mailbox": mailbox}
+        return {"envelopes": [], "error": err or "Failed to list envelopes", "mailbox": mailbox}
+    except Exception as error:
+        return {"envelopes": [], "error": str(error), "mailbox": mailbox}
 
-def fetch_envelopes_filtered(page_size, page):
-    """Fetch with exclusion; pull extra pages if filtering or deletion shrinks results."""
+
+def fetch_envelopes_filtered(page_size, page, mailbox="inbox"):
+    """Fetch one mailbox; pull extra inbox pages when exclusions shrink results."""
     collected = []
-    has_exclusions = bool(load_excluded_terms())
-    for p in range(page, page + 4):
-        result = fetch_envelopes_direct(page_size, p)
-        envs = result.get("envelopes", [])
-        if not envs:
+    has_exclusions = mailbox == "inbox" and bool(load_excluded_terms())
+    page_limit = page + 4 if has_exclusions else page + 1
+    for target_page in range(page, page_limit):
+        result = fetch_envelopes_direct(page_size, target_page, mailbox)
+        envelopes = result.get("envelopes", [])
+        if not envelopes:
             if not collected and result.get("error"):
                 return result
             break
-        filtered = apply_exclusion(envs) if has_exclusions else envs
-        collected.extend(filtered)
+        collected.extend(apply_exclusion(envelopes) if has_exclusions else envelopes)
         if len(collected) >= page_size:
             break
-    final_envs = collected[:page_size]
-    if final_envs:
-        save_page_cache(page_size, page, final_envs)
-    return {"envelopes": final_envs, "error": ""}
+    final_envelopes = collected[:page_size]
+    save_page_cache(page_size, page, final_envelopes, mailbox)
+    return {"envelopes": final_envelopes, "error": "", "mailbox": mailbox}
 
-def trigger_prefetch(page_size, target_page):
+
+def trigger_prefetch(page_size, target_page, mailbox="inbox"):
     """Launch background fetch for next/prev page if not cached."""
     if target_page < 1 or target_page > 20:
         return
-    cache_path = get_page_cache_path(page_size, target_page)
-    # If cached recently (< 5 minutes), skip
-    if os.path.exists(cache_path):
-        try:
-            if time.time() - os.path.getmtime(cache_path) < 300:
-                return
-        except Exception:
-            pass
+    cache_path = get_page_cache_path(page_size, target_page, mailbox)
+    modified = safe_mtime(cache_path)
+    if modified is not None and time.time() - modified < 300:
+        return
     try:
         script_path = os.path.abspath(__file__)
         subprocess.Popen(
-            ["python3", script_path, str(page_size), str(target_page), "--bg-fetch"],
+            ["python3", script_path, str(page_size), str(target_page), "--mailbox", mailbox, "--bg-fetch"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True
+            start_new_session=True,
         )
-    except Exception:
+    except OSError:
         pass
 
+
 def main():
+    if "--resolve-excluded" in sys.argv:
+        idx = sys.argv.index("--resolve-excluded")
+        try:
+            terms = _normalize_excluded_terms(json.loads(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else [])
+        except ValueError:
+            terms = []
+        # Background refresher: self-terminate if IMAP hangs (Gmail trickle), so a
+        # stuck server can never leave an orphaned process behind.
+        watchdog = threading.Timer(IMAP_OP_TIMEOUT + 5, os._exit, args=(0,))
+        watchdog.daemon = True
+        watchdog.start()
+        identifiers = _resolve_excluded_imap(terms)
+        watchdog.cancel()
+        if identifiers is not None:
+            try:
+                atomic_write_json(EXCLUDED_MSGID_CACHE, sorted(identifiers))
+            except OSError:
+                pass
+        print(json.dumps(sorted(identifiers or [])))
+        return
     if "--get-excluded" in sys.argv:
         print(json.dumps({"terms": load_excluded_terms(), "categories": GMAIL_CATEGORIES}))
         return
     if "--set-excluded" in sys.argv:
         idx = sys.argv.index("--set-excluded")
-        terms = json.loads(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else []
+        terms = _normalize_excluded_terms(json.loads(sys.argv[idx + 1]) if idx + 1 < len(sys.argv) else [])
         save_excluded_terms(terms)
         try: os.unlink(EXCLUDED_MSGID_CACHE)
         except Exception: pass
+        # Kick a background re-resolution so the new exclusion set takes effect
+        # without blocking; the refresher self-terminates on a hung server.
+        _trigger_exclusion_refresh(terms)
         print(json.dumps({"ok": True}))
         return
 
@@ -345,8 +314,22 @@ def main():
     cache_only = "--cache-only" in sys.argv
     force = "--force" in sys.argv
     is_bg = "--bg-fetch" in sys.argv
+    mailbox = "inbox"
+    args = []
+    index = 1
+    while index < len(sys.argv):
+        argument = sys.argv[index]
+        if argument == "--mailbox":
+            mailbox = sys.argv[index + 1].lower() if index + 1 < len(sys.argv) else ""
+            index += 2
+            continue
+        if not argument.startswith("--"):
+            args.append(argument)
+        index += 1
+    if mailbox not in ("inbox", "trash"):
+        print(json.dumps({"envelopes": [], "error": "Invalid mailbox"}))
+        sys.exit(1)
 
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if len(args) >= 1:
         try: page_size = max(1, min(100, int(args[0])))
         except ValueError: pass
@@ -355,34 +338,39 @@ def main():
         except ValueError: pass
 
     if is_bg:
-        fetch_envelopes_direct(page_size, page)
+        fetch_envelopes_direct(page_size, page, mailbox)
         sys.exit(0)
 
     if cache_only:
-        cached = get_cached_page(page_size, page)
+        cached = get_cached_page(page_size, page, mailbox)
         if cached is not None:
-            print(json.dumps({"envelopes": apply_exclusion(cached), "cached": True, "error": ""}))
+            envelopes = apply_exclusion(cached) if mailbox == "inbox" else cached
+            print(json.dumps({"envelopes": envelopes, "cached": True, "error": "", "mailbox": mailbox, "page": page}))
         else:
-            print(json.dumps({"envelopes": [], "cached": False, "error": ""}))
+            print(json.dumps({"envelopes": [], "cached": False, "error": "", "mailbox": mailbox, "page": page}))
         return
 
-    cached = get_cached_page(page_size, page)
+    cached = get_cached_page(page_size, page, mailbox)
     if cached is not None and not force:
-        print(json.dumps({"envelopes": apply_exclusion(cached), "cached": True, "error": ""}))
-        trigger_prefetch(page_size, page + 1)
-        if page > 1: trigger_prefetch(page_size, page - 1)
+        envelopes = apply_exclusion(cached) if mailbox == "inbox" else cached
+        print(json.dumps({"envelopes": envelopes, "cached": True, "error": "", "mailbox": mailbox, "page": page}))
+        trigger_prefetch(page_size, page + 1, mailbox)
+        if page > 1:
+            trigger_prefetch(page_size, page - 1, mailbox)
         return
 
-    result = fetch_envelopes_filtered(page_size, page)
+    result = fetch_envelopes_filtered(page_size, page, mailbox)
     if result.get("error") and cached is not None:
-        result["envelopes"] = apply_exclusion(cached)
+        result["envelopes"] = apply_exclusion(cached) if mailbox == "inbox" else cached
         result["from_cache"] = True
 
-    result["envelopes"] = apply_exclusion(result.get("envelopes", []))
+    if mailbox == "inbox":
+        result["envelopes"] = apply_exclusion(result.get("envelopes", []))
+    result["page"] = page
     print(json.dumps(result))
 
     if not result.get("error") and result.get("envelopes"):
-        trigger_prefetch(page_size, page + 1)
+        trigger_prefetch(page_size, page + 1, mailbox)
 
 if __name__ == "__main__":
     main()

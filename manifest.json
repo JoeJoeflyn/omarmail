@@ -5,7 +5,7 @@
   "version": "1.1.9",
   "author": "JoeJoeflyn",
   "license": "MIT",
-  "description": "Native status bar email client for Omarchy. Fast inbox previews, rich HTML rendering with image caching, search, and Himalaya integration.",
+  "description": "Native status bar email client for Omarchy. Fast inbox previews, sanitized rich rendering, search, and Himalaya integration.",
   "repository": "https://github.com/JoeJoeflyn/omarmail",
   "kinds": [
     "bar-widget"

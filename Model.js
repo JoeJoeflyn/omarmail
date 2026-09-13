@@ -106,10 +106,10 @@ function parseEnvelopeList(raw) {
   if (!raw || String(raw).trim() === "") return { envelopes: [], error: "" }
   try {
     var parsed = JSON.parse(raw)
-    if (parsed.error) return { envelopes: [], error: parsed.error }
-    if (Array.isArray(parsed)) return { envelopes: parsed, error: "" }
-    if (parsed.envelopes && Array.isArray(parsed.envelopes)) return { envelopes: parsed.envelopes, error: "" }
-    if (parsed.response && Array.isArray(parsed.response)) return { envelopes: parsed.response, error: "" }
+    if (parsed.error) return { envelopes: [], error: parsed.error, mailbox: parsed.mailbox || "", page: parsed.page || 0 }
+    if (Array.isArray(parsed)) return { envelopes: parsed, error: "", mailbox: "", page: 0 }
+    if (parsed.envelopes && Array.isArray(parsed.envelopes)) return { envelopes: parsed.envelopes, error: "", mailbox: parsed.mailbox || "", page: parsed.page || 0 }
+    if (parsed.response && Array.isArray(parsed.response)) return { envelopes: parsed.response, error: "", mailbox: parsed.mailbox || "", page: parsed.page || 0 }
     return { envelopes: [], error: "" }
   } catch (e) {
     return { envelopes: [], error: "Failed to parse: " + String(e) }

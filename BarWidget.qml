@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -10,10 +11,32 @@ BarWidget {
   id: root
   moduleName: "omarmail"
 
+  property string pendingPanelAction: ""
+  property string pendingMessageId: ""
+
   function ensurePanel() {
-    if (!panelLoader.active) {
-      panelLoader.active = true
-    }
+    if (!panelLoader.active) panelLoader.active = true
+  }
+
+  function runPendingPanelAction() {
+    var panel = panelLoader.item
+    if (!panel || pendingPanelAction === "") return
+    root.injectPanel()
+    var action = pendingPanelAction
+    var messageId = pendingMessageId
+    pendingPanelAction = ""
+    pendingMessageId = ""
+    if (action === "toggle" && panel.toggle) panel.toggle()
+    else if (action === "open" && panel.openFromHotkey) panel.openFromHotkey()
+    else if (action === "message" && panel.openMessage) panel.openMessage(messageId)
+    else if (action === "refresh" && panel.refresh) panel.refresh()
+  }
+
+  function queuePanelAction(action, messageId) {
+    pendingPanelAction = action
+    pendingMessageId = messageId || ""
+    ensurePanel()
+    runPendingPanelAction()
   }
 
   function injectPanel() {
@@ -25,32 +48,20 @@ BarWidget {
     if ("hostWidget" in target) target.hostWidget = root
   }
 
-  function refresh() {
-    if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
-  }
+  function refresh() { queuePanelAction("refresh", "") }
 
-  function togglePanel() {
-    ensurePanel()
-    if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
-    else Qt.callLater(function() { if (panelLoader.item && panelLoader.item.openFromHotkey) panelLoader.item.openFromHotkey() })
-  }
+  function togglePanel() { queuePanelAction("toggle", "") }
 
-  function openMessage(id) {
-    ensurePanel()
-    if (panelLoader.item && panelLoader.item.openMessage) panelLoader.item.openMessage(id)
-    else Qt.callLater(function() { if (panelLoader.item && panelLoader.item.openMessage) panelLoader.item.openMessage(id) })
-  }
+  function openMessage(id) { queuePanelAction("message", id) }
 
   // Shape contract for shell.summon/hide/toggle routing.
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 
-  function open() {
-    ensurePanel()
-    if (panelLoader.item && panelLoader.item.openFromHotkey) panelLoader.item.openFromHotkey()
-    else Qt.callLater(function() { if (panelLoader.item && panelLoader.item.openFromHotkey) panelLoader.item.openFromHotkey() })
-  }
+  function open() { queuePanelAction("open", "") }
 
   function close() {
+    pendingPanelAction = ""
+    pendingMessageId = ""
     if (panelLoader.item && panelLoader.item.close) panelLoader.item.close()
   }
 
@@ -67,6 +78,17 @@ BarWidget {
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
 
+  IpcHandler {
+    target: "omarmail"
+    function open() { root.open() }
+    function close() { root.close() }
+    function show() { root.open() }
+    function hide() { root.close() }
+    function toggle() { root.togglePanel() }
+    function refresh() { root.refresh() }
+    function openMessage(id: string) { root.openMessage(id) }
+  }
+
   Loader {
     id: panelLoader
     active: false
@@ -74,7 +96,10 @@ BarWidget {
     visible: false
     onLoaded: {
       root.injectPanel()
-      Qt.callLater(root.injectPanel)
+      Qt.callLater(function() {
+        root.injectPanel()
+        root.runPendingPanelAction()
+      })
     }
   }
 
