@@ -309,11 +309,23 @@ def main():
             sys.exit(1)
         print("ok" if _imap_delete_direct(mid) else "fail")
         sys.exit(0)
-    if len(sys.argv) < 3:
-        print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete|restore|empty_trash> <id>"}))
+    if len(sys.argv) < 2:
+        print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete|restore|empty_trash> [id] [mailbox]"}))
         sys.exit(1)
 
-    action = sys.argv[1]
+    action = sys.argv[1].replace("-", "_")
+    if action == "empty_trash":
+        ok, err = empty_trash()
+        if ok:
+            print(json.dumps({"success": True, "action": "empty_trash"}))
+            sys.exit(0)
+        print(json.dumps({"success": False, "error": err or "Failed to empty trash"}))
+        sys.exit(1)
+
+    if len(sys.argv) < 3:
+        print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete|restore|empty_trash> <id> [mailbox]"}))
+        sys.exit(1)
+
     mid = sys.argv[2]
     mailbox = sys.argv[3].lower() if len(sys.argv) > 3 else "inbox"
 
