@@ -148,14 +148,46 @@ Flickable {
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(4)
 
-        PanelActionButton {
+        BorderSurface {
           visible: p.mailboxMode === "trash" && p.envelopes.length > 0
-          iconText: "\uf2ed"
-          tooltipText: "Empty Trash"
-          foreground: p.dim
-          hoverColor: p.urgent
-          fontFamily: p.fontFamily
-          onClicked: p.emptyTrash()
+          anchors.verticalCenter: parent.verticalCenter
+          implicitHeight: Style.space(26)
+          implicitWidth: clearTrashRow.implicitWidth + Style.space(14)
+          radius: Style.cornerRadius
+          color: emptyHover.hovered ? Style.hoverFillFor(p.foreground, p.urgent) : "transparent"
+          borderSpec: Border.controlSpec("normal", emptyHover.hovered ? p.urgent : p.dim, p.urgent)
+
+          HoverHandler { id: emptyHover }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: p.emptyTrash()
+          }
+
+          Row {
+            id: clearTrashRow
+            anchors.centerIn: parent
+            spacing: Style.space(5)
+
+            Text {
+              text: "\uf1f8"
+              color: emptyHover.hovered ? p.urgent : p.dim
+              font.family: p.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Empty"
+              color: emptyHover.hovered ? p.urgent : p.dim
+              font.family: p.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
         }
 
         PanelActionButton {
