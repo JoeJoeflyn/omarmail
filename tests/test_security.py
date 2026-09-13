@@ -174,7 +174,7 @@ class MailboxTests(unittest.TestCase):
         self.assertEqual('', error)
         run.assert_called_once_with(
             ['himalaya', 'message', 'move', '--from', 'trash', '--to', 'inbox', '--', 'abc123'],
-            timeout=8.0,
+            timeout=20.0,
         )
 
 

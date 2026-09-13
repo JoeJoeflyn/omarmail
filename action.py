@@ -97,7 +97,7 @@ def remove_from_cache(mid):
             except OSError:
                 pass
 
-def run_himalaya_safe(cmd, timeout=8.0):
+def run_himalaya_safe(cmd, timeout=20.0):
     return run_bounded(cmd, timeout=timeout, max_output_bytes=2 * 1024 * 1024)
 
 def load_imap_credentials():
@@ -120,7 +120,7 @@ def resolve_uid_by_msgid(conn, himalaya_id):
         for pg in range(1, 6):
             stdout, _, code = run_bounded(
                 ["himalaya", "envelope", "list", "--json", "-p", str(pg), "-s", "10"],
-                timeout=8,
+                timeout=20,
                 max_output_bytes=1024 * 1024,
             )
             if code != 0 or not stdout:
@@ -201,7 +201,7 @@ def restore_message(mid):
     """Move a message from the trash mailbox back to the inbox."""
     out, err, code = run_himalaya_safe(
         ["himalaya", "message", "move", "--from", "trash", "--to", "inbox", "--", mid],
-        timeout=8.0,
+        timeout=20.0,
     )
     return (True, "") if code == 0 else (False, err or out or "Failed to restore message")
 
@@ -209,7 +209,7 @@ def restore_message(mid):
 def delete_message(mid):
     """Move message to trash via native himalaya delete with direct IMAP fallback."""
     # 1. Native himalaya message delete — works for Gmail REST (OAuth), IMAP, JMAP, Maildir
-    out, err, code = run_himalaya_safe(["himalaya", "message", "delete", "--", mid], timeout=8.0)
+    out, err, code = run_himalaya_safe(["himalaya", "message", "delete", "--", mid], timeout=20.0)
     if code == 0:
         return True, ""
 
@@ -270,6 +270,7 @@ def main():
             print(json.dumps({"success": False, "error": err or "Failed to delete message", "id": mid}))
             sys.exit(1)
     elif action == "restore" and mailbox == "trash":
+        remove_from_cache(mid)
         ok, err = restore_message(mid)
         if ok:
             print(json.dumps({"success": True, "id": mid, "action": action}))
@@ -281,7 +282,7 @@ def main():
         sys.exit(1)
 
     try:
-        _out, err, code = run_himalaya_safe(cmd, timeout=8.0)
+        _out, err, code = run_himalaya_safe(cmd, timeout=20.0)
         if code == 0:
             print(json.dumps({"success": True, "id": mid, "action": action}))
         else:

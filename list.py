@@ -213,7 +213,7 @@ def save_page_cache(page_size, page, envelopes, mailbox="inbox"):
         pass
 
 
-def run_himalaya_safe(cmd, timeout=8.0):
+def run_himalaya_safe(cmd, timeout=20.0):
     return run_bounded(cmd, timeout=timeout, max_output_bytes=2 * 1024 * 1024)
 
 
@@ -222,7 +222,7 @@ def fetch_envelopes_direct(page_size, page, mailbox="inbox"):
     if mailbox != "inbox":
         cmd.extend(["--mailbox", mailbox])
     try:
-        out, err, code = run_himalaya_safe(cmd, timeout=8.0)
+        out, err, code = run_himalaya_safe(cmd, timeout=20.0)
         if code == 0 and out:
             data = json.loads(out)
             envelopes = data.get("envelopes", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])

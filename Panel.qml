@@ -220,7 +220,7 @@ Panel {
     allEnvelopes = []
     errorMsg = ""
     ready = false
-    fetchPage(1, true)
+    fetchPage(1, false)
   }
 
   function loadExcludedTerms() {
