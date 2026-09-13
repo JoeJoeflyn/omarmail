@@ -357,6 +357,8 @@ def main():
         trigger_prefetch(page_size, page + 1, mailbox)
         if page > 1:
             trigger_prefetch(page_size, page - 1, mailbox)
+        elif mailbox == "inbox":
+            trigger_prefetch(page_size, 1, "trash")
         return
 
     result = fetch_envelopes_filtered(page_size, page, mailbox)
@@ -371,6 +373,8 @@ def main():
 
     if not result.get("error") and result.get("envelopes"):
         trigger_prefetch(page_size, page + 1, mailbox)
+        if mailbox == "inbox" and page == 1:
+            trigger_prefetch(page_size, 1, "trash")
 
 if __name__ == "__main__":
     main()
