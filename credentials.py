@@ -117,3 +117,29 @@ def load_imap_credentials(config_path):
             continue
 
     return None
+
+
+def load_gmail_token(config_path):
+    """Return Gmail OAuth token string if configured in Himalaya config."""
+    raw_config = _read_config(config_path)
+    if raw_config is None:
+        return None
+    try:
+        config = tomllib.loads(raw_config.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+
+    accounts = config.get("accounts", {})
+    if not isinstance(accounts, dict):
+        return None
+
+    for account in accounts.values():
+        try:
+            token_spec = account.get("gmail", {}).get("auth", {}).get("token", {})
+            token = resolve_secret(token_spec)
+            if token:
+                return token
+        except (AttributeError, TypeError):
+            continue
+
+    return None

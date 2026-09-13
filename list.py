@@ -4,6 +4,8 @@
 Usage:
   python3 list.py [page_size] [page] [--mailbox inbox|trash] [--cache-only] [--force]
 """
+import concurrent.futures
+import email.utils
 import fcntl
 import imaplib
 import json
@@ -13,8 +15,10 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 
-from credentials import load_imap_credentials as load_credentials
+from credentials import load_gmail_token, load_imap_credentials as load_credentials
 from secure_io import (
     atomic_write_json,
     ensure_private_dir,
@@ -217,7 +221,65 @@ def run_himalaya_safe(cmd, timeout=20.0):
     return run_bounded(cmd, timeout=timeout, max_output_bytes=2 * 1024 * 1024)
 
 
+def fetch_envelopes_gmail_api(token, page_size, page=1, mailbox="inbox"):
+    """Ultra-fast concurrent envelope fetcher using direct Gmail REST API."""
+    query = "in:trash" if mailbox == "trash" else "in:inbox"
+    url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages?q={urllib.parse.quote(query)}&maxResults={page_size}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        list_data = json.loads(resp.read().decode("utf-8"))
+    msgs = list_data.get("messages", [])
+    if not msgs:
+        return []
+
+    def fetch_meta(m):
+        mid = m.get("id")
+        if not mid or not re.fullmatch(r"[A-Za-z0-9._-]+", mid):
+            return None
+        meta_url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date&metadataHeaders=Message-ID&metadataHeaders=In-Reply-To"
+        r = urllib.request.Request(meta_url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(r, timeout=8) as r_resp:
+            msg = json.loads(r_resp.read().decode("utf-8"))
+        headers = {h["name"].lower(): h.get("value", "") for h in msg.get("payload", {}).get("headers", [])}
+        from_raw = headers.get("from", "")
+        name, addr = email.utils.parseaddr(from_raw)
+        is_unread = "UNREAD" in msg.get("labelIds", [])
+        flags = [] if is_unread else [{"raw": "\\Seen", "iana": "seen"}]
+        if "STARRED" in msg.get("labelIds", []):
+            flags.append({"raw": "\\Flagged", "iana": "flagged"})
+        if "IMPORTANT" in msg.get("labelIds", []):
+            flags.append({"raw": "$Important", "iana": "important"})
+        return {
+            "id": msg["id"],
+            "message-id": headers.get("message-id", "").strip("<>"),
+            "in-reply-to": [headers["in-reply-to"].strip("<>")] if "in-reply-to" in headers else [],
+            "flags": flags,
+            "subject": headers.get("subject", "(No Subject)"),
+            "from": [{"name": name or None, "email": addr}],
+            "to": [{"name": None, "email": headers.get("to", "")}],
+            "date": headers.get("date", ""),
+            "size": int(msg.get("sizeEstimate", 0)),
+            "has-attachment": None
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, max(4, len(msgs)))) as pool:
+        envelopes = [env for env in pool.map(fetch_meta, msgs) if env is not None]
+    return envelopes
+
+
 def fetch_envelopes_direct(page_size, page, mailbox="inbox"):
+    # 1. Fast path: Direct Gmail REST API with concurrent message fetching
+    if page == 1:
+        try:
+            token = load_gmail_token(HIMALAYA_CONFIG)
+            if token:
+                envelopes = fetch_envelopes_gmail_api(token, page_size, page, mailbox)
+                save_page_cache(page_size, page, envelopes, mailbox)
+                return {"envelopes": envelopes, "error": "", "mailbox": mailbox}
+        except Exception:
+            pass
+
+    # 2. Standard Himalaya fallback
     cmd = ["himalaya", "envelope", "list", "--json", "-s", str(page_size), "-p", str(page)]
     if mailbox != "inbox":
         cmd.extend(["--mailbox", mailbox])
