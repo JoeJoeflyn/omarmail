@@ -303,22 +303,22 @@ Flickable {
 
     // General error
     Item {
-      visible: p.ready && p.errorMsg !== "" && !p.needsAuth && !p.authInProgress && p.envelopes.length === 0
+      visible: p.ready && !p.listProcRunning && p.errorMsg !== "" && !p.needsAuth && !p.authInProgress && p.envelopes.length === 0
       width: parent.width; implicitHeight: errText.implicitHeight + Style.space(24)
       Text { id: errText; anchors.centerIn: parent; width: parent.width - Style.space(32); textFormat: Text.PlainText; text: p.errorMsg; color: p.urgent; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter }
     }
 
     // Loading
     Column {
-      visible: !p.ready && !p.needsAuth && !p.authInProgress
+      visible: (!p.ready || (p.listProcRunning && p.envelopes.length === 0)) && !p.needsAuth && !p.authInProgress
       width: parent.width; spacing: Style.space(12); topPadding: Style.space(32); bottomPadding: Style.space(32)
-      Text { text: "\uf110"; color: Color.accent; font.family: p.fontFamily; font.pixelSize: Style.font.title; anchors.horizontalCenter: parent.horizontalCenter; RotationAnimator on rotation { running: !p.ready; from: 0; to: 360; duration: 900; loops: Animation.Infinite } }
+      Text { text: "\uf110"; color: Color.accent; font.family: p.fontFamily; font.pixelSize: Style.font.title; anchors.horizontalCenter: parent.horizontalCenter; RotationAnimator on rotation { running: (!p.ready || (p.listProcRunning && p.envelopes.length === 0)); from: 0; to: 360; duration: 900; loops: Animation.Infinite } }
       Text { textFormat: Text.PlainText; text: p.mailboxMode === "trash" ? "Loading trash..." : "Loading inbox..."; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.horizontalCenter: parent.horizontalCenter }
     }
 
     // Empty State (Search empty vs Inbox zero)
     Column {
-      visible: p.ready && p.envelopes.length === 0 && p.errorMsg === "" && !p.needsAuth && !p.authInProgress
+      visible: p.ready && !p.listProcRunning && p.envelopes.length === 0 && p.errorMsg === "" && !p.needsAuth && !p.authInProgress
       width: parent.width - Style.space(32)
       anchors.horizontalCenter: parent.horizontalCenter
       spacing: Style.space(8)

@@ -105,7 +105,7 @@ Panel {
   readonly property bool searchProcRunning: searchProc.running
   property int keyCatcherHeight: 0
 
-  Component.onCompleted: { cacheInitProc.running = true; loadExcludedTerms() }
+  Component.onCompleted: { cacheInitProc.running = true; loadExcludedTerms(); trashPreloadProc.running = true }
 
   // ---- Lifecycle
   function open() {
@@ -532,6 +532,11 @@ Panel {
         } catch (e) {}
       }
     }
+  }
+
+  Process {
+    id: trashPreloadProc
+    command: ["python3", Qt.resolvedUrl("list.py").toString().replace("file://", ""), String(root.pageSize), "1", "--mailbox", "trash", "--bg-fetch"]
   }
 
   Process {
