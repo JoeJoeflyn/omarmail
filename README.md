@@ -14,14 +14,15 @@
 
 - **Native Omarchy Bar Widget**: Status bar envelope icon with real-time unread badges, status dots, and interactive tooltips.
 - **Anchored Flyout Panel**: Anchored seamlessly below the status bar tray, matching first-party Omarchy panels (`tailscale`, `audio`, `network`).
-- **Rich HTML Email Renderer**:
-  - Full HTML & multi-part email rendering with formatted typography, headings, bullet lists, blockquotes, and tables.
-  - Smart banner and logo image scaling with ultra-fast concurrent caching in `~/.cache/omarmail/images/`.
+- **Safe Rich Email Renderer**:
+  - Sanitized HTML and plain-text/Markdown rendering with formatted typography, headings, bullet lists, blockquotes, and tables.
+  - Remote body images and active markup are blocked; optional GitHub sender avatars are validated and cached privately.
   - Monospace code block support for patch diffs, stack traces, and developer notifications.
-  - Clickable external links that open directly in your default browser.
-- **Fast Inbox Actions**:
+  - Only HTTP(S) and mail links can open in your default browser.
+- **Fast Mailbox Actions**:
+  - The active mailbox is refreshed from the server whenever the panel opens.
   - Instant Mark as Read / Unread toggle without triggering detail view.
-  - One-click deletion (Move to Trash).
+  - Inbox and Trash tabs with one-click trash and restore actions.
   - Sender initials avatar bubbles and clean relative timestamps.
 - **Live Search & Gmail Filter**:
   - Instant live fuzzy filtering by sender, email address, or subject.
@@ -76,10 +77,12 @@ Download [ortie v2.2.0](https://github.com/pimalaya/ortie/releases/tag/v2.2.0), 
 x86_64 Linux:
 
 ```bash
-curl -sSL -o /tmp/ortie.tgz https://github.com/pimalaya/ortie/releases/download/v2.2.0/ortie.x86_64-linux.tgz
-echo '526972ac0b98eac66c943058de350c668d594e0898c8c6bb2d1b0348fafcdb52  /tmp/ortie.tgz' | sha256sum -c
+archive=$(mktemp --suffix=.ortie.tgz)
+trap 'rm -f "$archive"' EXIT
+curl --fail --proto '=https' --tlsv1.2 -sSL -o "$archive" https://github.com/pimalaya/ortie/releases/download/v2.2.0/ortie.x86_64-linux.tgz
+echo "526972ac0b98eac66c943058de350c668d594e0898c8c6bb2d1b0348fafcdb52  $archive" | sha256sum -c
 mkdir -p ~/.local/bin
-tar -xzf /tmp/ortie.tgz -C ~/.local/bin
+tar -xzf "$archive" -C ~/.local/bin
 ```
 
 aarch64 Linux: use `ortie.aarch64-linux.tgz` with sha256 `667586c32ec3d087a40418014f286f0b8912001d32deef94edf668a634d898c6`.
@@ -94,10 +97,12 @@ email = "you@example.com"
 mailbox.alias.inbox = "INBOX"
 imap.server = "imap.example.com:993"
 imap.sasl.plain.username = "you@example.com"
-imap.sasl.plain.password.raw = "your-app-password"
+imap.sasl.plain.password.command = ["secret-tool", "lookup", "service", "omarmail", "account", "you@example.com"]
 ```
 
-For Gmail, use `imap.server = "imap.gmail.com:993"` with an [app password](https://support.google.com/accounts/answer/185833) in `imap.sasl.plain.password.raw` — not your account password. Keep the account named `personal` — the plugin reads `accounts.personal` from this file.
+Store the secret first with `secret-tool store --label="Omarmail" service omarmail account you@example.com`. Himalaya and Omarmail also support other password-manager commands such as `pass` or `gopass`. A `password.raw` value remains compatible, but a password-manager command is recommended so the app password is not stored in plaintext.
+
+For Gmail, use `imap.server = "imap.gmail.com:993"` with a dedicated [app password](https://support.google.com/accounts/answer/185833) — never your account password. The account may have any name; Omarmail scans configured accounts.
 
 For Gmail OAuth instead: install ortie (step 2), then sign in when the panel prompts — the plugin writes `~/.config/ortie/config.toml` and the himalaya OAuth config automatically.
 
@@ -114,7 +119,7 @@ For Gmail OAuth instead: install ortie (step 2), then sign in when the panel pro
 | `Enter` | Open selected email |
 | `Escape` / `Backspace` | Back to inbox / close search / close panel |
 | `u` | Toggle Read / Unread status |
-| `d` | Move message to Trash |
+| `d` | Move to Trash, or restore to Inbox from the Trash tab |
 | `/` or `s` | Focus search bar |
 | `r` | Refresh inbox |
 

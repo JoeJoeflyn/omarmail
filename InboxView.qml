@@ -36,10 +36,10 @@ Flickable {
         spacing: Style.space(8)
 
         Text { text: "\uf0e0"; color: Color.accent; font.family: p.fontFamily; font.pixelSize: Style.font.title; anchors.verticalCenter: parent.verticalCenter }
-        Text { text: p.gmailSearch ? "Search Results" : (p.searchMode ? "Filtered Inbox" : "Inbox"); color: p.foreground; font.family: p.fontFamily; font.pixelSize: Style.font.title; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+        Text { text: p.searchMode ? "Search" : "Mail"; color: p.foreground; font.family: p.fontFamily; font.pixelSize: Style.font.title; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
 
         BorderSurface {
-          visible: p.unreadCount > 0 && !p.searchMode
+          visible: p.mailboxMode === "inbox" && p.unreadCount > 0 && !p.searchMode
           anchors.verticalCenter: parent.verticalCenter
           implicitWidth: badge.implicitWidth + Style.space(12)
           implicitHeight: badge.implicitHeight + Style.space(4)
@@ -73,7 +73,7 @@ Flickable {
         }
 
         PanelActionButton {
-          iconText: "\uf021"; tooltipText: "Refresh inbox"
+          iconText: "\uf021"; tooltipText: p.mailboxMode === "trash" ? "Refresh trash" : "Refresh inbox"
           foreground: p.foreground; hoverColor: Color.accent; fontFamily: p.fontFamily
           onClicked: p.refresh()
           RotationAnimator on rotation { running: p.listProcRunning || p.searchProcRunning; from: 0; to: 360; duration: 800; loops: Animation.Infinite }
@@ -81,8 +81,55 @@ Flickable {
       }
     }
 
+    // Primary mailbox navigation — one compact segmented control.
+    BorderSurface {
+      width: parent.width - Style.space(24)
+      anchors.horizontalCenter: parent.horizontalCenter
+      implicitHeight: Style.space(38)
+      color: Style.hoverFillFor(p.foreground, Color.accent)
+      borderSpec: Border.controlSpec("normal", p.dim, Color.accent)
+      radius: Style.cornerRadius
+
+      Row {
+        id: mailboxTabs
+        anchors.fill: parent
+        anchors.margins: Style.space(3)
+        spacing: Style.space(3)
+
+        Repeater {
+          model: [
+            { label: "Inbox", mailbox: "inbox", icon: "\uf0e0" },
+            { label: "Trash", mailbox: "trash", icon: "\uf1f8" }
+          ]
+          delegate: Rectangle {
+            id: mailboxTab
+            required property var modelData
+            readonly property bool selected: p.mailboxMode === modelData.mailbox
+            width: (mailboxTabs.width - mailboxTabs.spacing) / 2
+            height: mailboxTabs.height
+            radius: Math.max(2, Style.cornerRadius - Style.space(2))
+            color: selected ? Style.selectedFillFor(p.foreground, Color.accent) : "transparent"
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: p.selectMailbox(mailboxTab.modelData.mailbox)
+            }
+
+            Row {
+              anchors.centerIn: parent
+              spacing: Style.space(7)
+              Text { text: mailboxTab.modelData.icon; color: mailboxTab.selected ? Color.accent : p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall }
+              Text { textFormat: Text.PlainText; text: mailboxTab.modelData.label; color: mailboxTab.selected ? p.foreground : p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: mailboxTab.selected }
+            }
+          }
+        }
+      }
+    }
+
     // Category toggle chips
     Row {
+      visible: p.mailboxMode === "inbox"
       width: parent.width
       leftPadding: Style.space(12); rightPadding: Style.space(12)
       spacing: Style.space(6)
@@ -127,19 +174,19 @@ Flickable {
         id: searchField
         anchors.left: parent.left; anchors.leftMargin: Style.space(10)
         anchors.right: parent.right; anchors.rightMargin: Style.space(10)
-        placeholderText: "Search subject, sender, or from:..."
+        placeholderText: p.mailboxMode === "trash" ? "Filter trash..." : "Search subject, sender, or from:..."
         foreground: p.foreground; accent: Color.accent; font.pixelSize: Style.font.bodySmall
 
         onTextChanged: {
           var q = text.trim()
           if (q === "") { if (p.searchMode) p.clearSearch() }
-          else if (Model.isGmailOperator(q)) searchDebounce.restart()
+          else if (p.mailboxMode === "inbox" && Model.isGmailOperator(q)) searchDebounce.restart()
           else { searchDebounce.stop(); p.runSearch(q, "") }
         }
         Keys.onEscapePressed: { text = ""; p.clearSearch(); p.searchOpen = false }
       }
 
-      Timer { id: searchDebounce; interval: 600; onTriggered: { var q = searchField.text.trim(); if (q !== "" && Model.isGmailOperator(q)) p.runSearch(q, "") } }
+      Timer { id: searchDebounce; interval: 600; onTriggered: { var q = searchField.text.trim(); if (q !== "" && p.mailboxMode === "inbox" && Model.isGmailOperator(q)) p.runSearch(q, "") } }
     }
 
     PanelSeparator { foreground: p.foreground }
@@ -184,7 +231,7 @@ Flickable {
       visible: !p.ready && !p.needsAuth && !p.authInProgress
       width: parent.width; spacing: Style.space(12); topPadding: Style.space(32); bottomPadding: Style.space(32)
       Text { text: "\uf110"; color: Color.accent; font.family: p.fontFamily; font.pixelSize: Style.font.title; anchors.horizontalCenter: parent.horizontalCenter; RotationAnimator on rotation { running: !p.ready; from: 0; to: 360; duration: 900; loops: Animation.Infinite } }
-      Text { textFormat: Text.PlainText; text: "Loading inbox..."; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.horizontalCenter: parent.horizontalCenter }
+      Text { textFormat: Text.PlainText; text: p.mailboxMode === "trash" ? "Loading trash..." : "Loading inbox..."; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.bodySmall; anchors.horizontalCenter: parent.horizontalCenter }
     }
 
     // Empty State (Search empty vs Inbox zero)
@@ -214,7 +261,7 @@ Flickable {
 
       Text {
         textFormat: Text.PlainText
-        text: p.searchMode ? "No matching emails found" : "All caught up!"
+        text: p.searchMode ? "No matching emails found" : (p.mailboxMode === "trash" ? "Trash is empty" : "All caught up!")
         color: p.foreground
         font.family: p.fontFamily
         font.pixelSize: Style.font.body
@@ -224,7 +271,7 @@ Flickable {
 
       Text {
         textFormat: Text.PlainText
-        text: p.searchMode ? "Try searching with different keywords or operators." : "Your inbox is clear. No unread messages."
+        text: p.searchMode ? "Try a different search." : (p.mailboxMode === "trash" ? "Deleted messages will appear here." : "Your inbox is clear. No unread messages.")
         color: p.dim
         font.family: p.fontFamily
         font.pixelSize: Style.font.caption
@@ -303,7 +350,7 @@ Flickable {
           Row {
             id: actionRow; z: 10; visible: emailRow.isHovered; anchors.verticalCenter: parent.verticalCenter; spacing: Style.space(4)
             PanelActionButton { iconText: emailRow.isSeen ? "\uf0e0" : "\uf2b7"; tooltipText: emailRow.isSeen ? "Mark as unread" : "Mark as read"; foreground: p.foreground; hoverColor: Color.accent; fontFamily: p.fontFamily; onClicked: p.toggleSeen(emailRow.env.id, emailRow.isSeen) }
-            PanelActionButton { iconText: "\uf014"; tooltipText: "Move to trash"; foreground: p.foreground; hoverColor: p.urgent; fontFamily: p.fontFamily; onClicked: p.deleteMessage(emailRow.env.id) }
+            PanelActionButton { iconText: p.mailboxMode === "trash" ? "\uf2ea" : "\uf014"; tooltipText: p.mailboxMode === "trash" ? "Restore to inbox" : "Move to trash"; foreground: p.foreground; hoverColor: p.mailboxMode === "trash" ? Color.accent : p.urgent; fontFamily: p.fontFamily; onClicked: { if (p.mailboxMode === "trash") p.restoreMessage(emailRow.env.id); else p.deleteMessage(emailRow.env.id) } }
           }
         }
       }

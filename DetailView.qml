@@ -25,7 +25,7 @@ Item {
       id: backBtn
       anchors.left: parent.left; anchors.leftMargin: Style.space(10)
       anchors.verticalCenter: parent.verticalCenter
-      text: "Inbox"
+      text: p.mailboxMode === "trash" ? "Trash" : "Inbox"
       iconText: "\uf060"
       fontFamily: p.fontFamily
       fontSize: Style.font.bodySmall
@@ -52,12 +52,17 @@ Item {
       }
 
       PanelActionButton {
-        iconText: "\uf014"
-        tooltipText: "Move to Trash (d)"
+        iconText: p.mailboxMode === "trash" ? "\uf2ea" : "\uf014"
+        tooltipText: p.mailboxMode === "trash" ? "Restore to Inbox (d)" : "Move to Trash (d)"
         foreground: p.foreground
-        hoverColor: p.urgent
+        hoverColor: p.mailboxMode === "trash" ? Color.accent : p.urgent
         fontFamily: p.fontFamily
-        onClicked: { if (p.selectedEnvelope) p.deleteMessage(p.selectedEnvelope.id) }
+        onClicked: {
+          if (p.selectedEnvelope) {
+            if (p.mailboxMode === "trash") p.restoreMessage(p.selectedEnvelope.id)
+            else p.deleteMessage(p.selectedEnvelope.id)
+          }
+        }
       }
 
       PanelActionButton {
@@ -334,7 +339,7 @@ Item {
         TextEdit {
           width: parent.width
           text: p.currentDetail ? (p.currentDetail.body_html || p.currentDetail.body || "(No message text)") : ""
-          textFormat: TextEdit.RichText
+          textFormat: p.currentDetail && p.currentDetail.body_html ? TextEdit.RichText : TextEdit.PlainText
           readOnly: true
           selectByMouse: true
           color: p.foreground
@@ -344,7 +349,10 @@ Item {
           selectByKeyboard: true
           selectionColor: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.4)
           selectedTextColor: p.foreground
-          onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+          onLinkActivated: function(link) {
+            var target = String(link || "")
+            if (/^(https?:\/\/|mailto:)/i.test(target)) Qt.openUrlExternally(target)
+          }
         }
       }
     }
@@ -378,8 +386,8 @@ Item {
 
       Row {
         spacing: Style.space(4)
-        Text { text: "d"; color: p.urgent; font.family: p.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
-        Text { text: "Trash"; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.caption }
+        Text { text: "d"; color: p.mailboxMode === "trash" ? Color.accent : p.urgent; font.family: p.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
+        Text { text: p.mailboxMode === "trash" ? "Restore" : "Trash"; color: p.dim; font.family: p.fontFamily; font.pixelSize: Style.font.caption }
       }
 
       Row {
