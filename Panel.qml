@@ -370,6 +370,18 @@ Panel {
     if (wasInDetail) backToInbox()
   }
 
+  function emptyTrash() {
+    if (mailboxMode !== "trash") return
+    var wasInDetail = viewMode === "detail"
+    envelopes = []
+    allEnvelopes = []
+    selectedId = ""
+    selectedEnvelope = null
+    currentDetail = null
+    if (wasInDetail) backToInbox()
+    enqueueMove("empty_trash", "all")
+  }
+
   function openInGmail(id) { Qt.openUrlExternally("https://mail.google.com/mail/u/0/#inbox/" + id) }
 
   function startAuth() { authInProgress = true; needsAuth = false; errorMsg = ""; authProc.running = true }

@@ -149,6 +149,16 @@ Flickable {
         spacing: Style.space(4)
 
         PanelActionButton {
+          visible: p.mailboxMode === "trash" && p.envelopes.length > 0
+          iconText: "\uf2ed"
+          tooltipText: "Empty Trash"
+          foreground: p.dim
+          hoverColor: p.urgent
+          fontFamily: p.fontFamily
+          onClicked: p.emptyTrash()
+        }
+
+        PanelActionButton {
           iconText: "\uf002"; tooltipText: p.searchOpen ? "Hide search" : "Search emails"
           foreground: p.foreground; hoverColor: Color.accent; fontFamily: p.fontFamily
           onClicked: {

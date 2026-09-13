@@ -177,6 +177,18 @@ class MailboxTests(unittest.TestCase):
             timeout=20.0,
         )
 
+    def test_empty_trash_deletes_all_trash_messages(self):
+        with mock.patch.object(action, 'run_himalaya_safe') as run:
+            run.side_effect = [
+                (json.dumps({'envelopes': [{'id': 't1'}, {'id': 't2'}]}), '', 0),
+                ('', '', 0),
+            ]
+            ok, error = action.empty_trash()
+
+        self.assertTrue(ok)
+        self.assertEqual('', error)
+        self.assertEqual(2, run.call_count)
+
 
 class PanelCompatibilityTests(unittest.TestCase):
     def test_close_hides_before_optional_hover_suppression(self):

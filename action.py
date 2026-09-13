@@ -206,6 +206,48 @@ def restore_message(mid):
     return (True, "") if code == 0 else (False, err or out or "Failed to restore message")
 
 
+def clear_trash_cache():
+    for name in os.listdir(PAGES_DIR):
+        if name.startswith("trash_p_") and name.endswith(".json"):
+            try:
+                os.unlink(os.path.join(PAGES_DIR, name))
+            except OSError:
+                pass
+    for name in os.listdir(MSG_CACHE_DIR):
+        if name.startswith("trash_") and name.endswith(".json"):
+            try:
+                os.unlink(os.path.join(MSG_CACHE_DIR, name))
+            except OSError:
+                pass
+
+
+def empty_trash():
+    """Permanently delete all messages in the trash mailbox and clear trash cache."""
+    clear_trash_cache()
+    out, err, code = run_himalaya_safe(
+        ["himalaya", "envelope", "list", "--mailbox", "trash", "--json", "-s", "100"],
+        timeout=20.0,
+    )
+    if code != 0 or not out:
+        return True, ""
+    try:
+        data = json.loads(out)
+        envelopes = data.get("envelopes", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        ids = [env.get("id") for env in envelopes if env.get("id")]
+        if not ids:
+            return True, ""
+        del_out, del_err, del_code = run_himalaya_safe(
+            ["himalaya", "message", "delete", "--mailbox", "trash", "--", *ids],
+            timeout=25.0,
+        )
+        clear_trash_cache()
+        if del_code == 0:
+            return True, ""
+        return False, del_err or del_out or "Failed to empty trash"
+    except Exception as e:
+        return False, str(e)
+
+
 def delete_message(mid):
     """Move message to trash via native himalaya delete with direct IMAP fallback."""
     # 1. Native himalaya message delete — works for Gmail REST (OAuth), IMAP, JMAP, Maildir
@@ -238,7 +280,7 @@ def main():
         print("ok" if _imap_delete_direct(mid) else "fail")
         sys.exit(0)
     if len(sys.argv) < 3:
-        print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete> <id>"}))
+        print(json.dumps({"success": False, "error": "Usage: action.py <mark_read|mark_unread|delete|restore|empty_trash> <id>"}))
         sys.exit(1)
 
     action = sys.argv[1]
@@ -276,6 +318,13 @@ def main():
             print(json.dumps({"success": True, "id": mid, "action": action}))
             sys.exit(0)
         print(json.dumps({"success": False, "error": err, "id": mid}))
+        sys.exit(1)
+    elif action == "empty_trash" and mailbox == "trash":
+        ok, err = empty_trash()
+        if ok:
+            print(json.dumps({"success": True, "action": "empty_trash"}))
+            sys.exit(0)
+        print(json.dumps({"success": False, "error": err or "Failed to empty trash"}))
         sys.exit(1)
     else:
         print(json.dumps({"success": False, "error": f"Unknown action: {action}"}))
