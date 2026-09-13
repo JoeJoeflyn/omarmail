@@ -5,8 +5,10 @@ import json
 import os
 import re
 import sys
+import urllib.parse
+import urllib.request
 
-from credentials import load_imap_credentials as load_credentials
+from credentials import load_gmail_token, load_imap_credentials as load_credentials
 from secure_io import atomic_write_json, ensure_private_dir, read_json, run_bounded
 
 CACHE_DIR = ensure_private_dir(os.path.expanduser("~/.cache/omarmail"))
@@ -224,17 +226,45 @@ def clear_trash_cache():
 def empty_trash():
     """Permanently delete all messages in the trash mailbox and clear trash cache."""
     clear_trash_cache()
+
+    # 1. Fast path: Direct Gmail REST API batch delete
+    token = load_gmail_token(HIMALAYA_CONFIG)
+    if token:
+        try:
+            url = "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:trash&maxResults=100"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                list_data = json.loads(resp.read().decode("utf-8"))
+            ids = [m.get("id") for m in list_data.get("messages", []) if m.get("id")]
+            if not ids:
+                clear_trash_cache()
+                return True, ""
+            del_req = urllib.request.Request(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchDelete",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                data=json.dumps({"ids": ids}).encode("utf-8"),
+            )
+            with urllib.request.urlopen(del_req, timeout=15) as del_resp:
+                if del_resp.status in (200, 204):
+                    clear_trash_cache()
+                    return True, ""
+        except Exception:
+            pass
+
+    # 2. Fallback: Himalaya
     out, err, code = run_himalaya_safe(
         ["himalaya", "envelope", "list", "--mailbox", "trash", "--json", "-s", "100"],
         timeout=20.0,
     )
     if code != 0 or not out:
+        clear_trash_cache()
         return True, ""
     try:
         data = json.loads(out)
         envelopes = data.get("envelopes", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
         ids = [env.get("id") for env in envelopes if env.get("id")]
         if not ids:
+            clear_trash_cache()
             return True, ""
         del_out, del_err, del_code = run_himalaya_safe(
             ["himalaya", "message", "delete", "--mailbox", "trash", "--", *ids],

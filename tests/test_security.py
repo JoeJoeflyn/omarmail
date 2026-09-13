@@ -178,7 +178,8 @@ class MailboxTests(unittest.TestCase):
         )
 
     def test_empty_trash_deletes_all_trash_messages(self):
-        with mock.patch.object(action, 'run_himalaya_safe') as run:
+        with mock.patch.object(action, 'load_gmail_token', return_value=None), \
+             mock.patch.object(action, 'run_himalaya_safe') as run:
             run.side_effect = [
                 (json.dumps({'envelopes': [{'id': 't1'}, {'id': 't2'}]}), '', 0),
                 ('', '', 0),
@@ -188,6 +189,30 @@ class MailboxTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual('', error)
         self.assertEqual(2, run.call_count)
+
+    def test_empty_trash_uses_gmail_batch_delete(self):
+        class FakeResponse:
+            def __init__(self, data, status=200):
+                self.data = data
+                self.status = status
+            def read(self):
+                return self.data
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        with mock.patch.object(action, 'load_gmail_token', return_value='fake-token'), \
+             mock.patch('urllib.request.urlopen') as mock_urlopen:
+            mock_urlopen.side_effect = [
+                FakeResponse(json.dumps({'messages': [{'id': 'm1'}, {'id': 'm2'}]}).encode('utf-8')),
+                FakeResponse(b'', status=204),
+            ]
+            ok, error = action.empty_trash()
+
+        self.assertTrue(ok)
+        self.assertEqual('', error)
+        self.assertEqual(2, mock_urlopen.call_count)
 
 
 class PanelCompatibilityTests(unittest.TestCase):

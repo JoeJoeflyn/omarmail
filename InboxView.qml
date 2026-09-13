@@ -154,13 +154,13 @@ Flickable {
           implicitHeight: Style.space(26)
           implicitWidth: clearTrashRow.implicitWidth + Style.space(14)
           radius: Style.cornerRadius
-          color: emptyHover.hovered ? Style.hoverFillFor(p.foreground, p.urgent) : "transparent"
-          borderSpec: Border.controlSpec("normal", emptyHover.hovered ? p.urgent : p.dim, p.urgent)
-
-          HoverHandler { id: emptyHover }
+          color: emptyMouse.containsMouse ? Style.hoverFillFor(p.foreground, p.urgent) : "transparent"
+          borderSpec: Border.controlSpec("normal", emptyMouse.containsMouse ? p.urgent : p.dim, p.urgent)
 
           MouseArea {
+            id: emptyMouse
             anchors.fill: parent
+            hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: p.emptyTrash()
           }
@@ -172,7 +172,7 @@ Flickable {
 
             Text {
               text: "\uf1f8"
-              color: emptyHover.hovered ? p.urgent : p.dim
+              color: emptyMouse.containsMouse ? p.urgent : p.dim
               font.family: p.fontFamily
               font.pixelSize: Style.font.caption
               anchors.verticalCenter: parent.verticalCenter
@@ -181,7 +181,7 @@ Flickable {
             Text {
               textFormat: Text.PlainText
               text: "Empty"
-              color: emptyHover.hovered ? p.urgent : p.dim
+              color: emptyMouse.containsMouse ? p.urgent : p.dim
               font.family: p.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
